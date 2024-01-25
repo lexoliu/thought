@@ -1,32 +1,46 @@
-use std::path::Path;
+use std::path::PathBuf;
 
-use itertools::Itertools;
 use liquid::object;
-use pulldown_cmark::{Event, HeadingLevel, Tag};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::utils::{read_to_string, to_html, workspace, BuildResource, Error, Result};
+use crate::build::BuildResource;
+use crate::category::Category;
+use crate::workspace::Workspace;
+use crate::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
+    pub author: String,
     pub tags: Vec<String>,
 }
 
 impl Metadata {
-    pub const fn new(created: OffsetDateTime) -> Self {
+    pub fn new(created: OffsetDateTime, author: impl Into<String>) -> Self {
         Self {
             created,
+            author: author.into(),
             tags: Vec::new(),
         }
     }
+
+    pub fn add_tag(&mut self, tag: impl Into<String>) {
+        self.tags.push(tag.into());
+    }
+
+    pub fn export(&self) -> String {
+        // Serialization for config never fail, so that we can use `unwrap`
+        toml::to_string_pretty(&self).unwrap()
+    }
 }
 
+#[derive(Debug)]
 pub struct Article {
+    pub(crate) workspace: Workspace,
     pub title: String,
-    pub category: Vec<String>,
+    pub category: Category,
     pub content: String,
     pub metadata: Metadata,
     pub name: String,
@@ -37,98 +51,50 @@ pub struct ArticlePreview {
     pub title: String,
     pub description: String,
     pub metadata: Metadata,
-    pub url: String,
 }
 
 impl Article {
-    // This article must be in a workspace.
-    pub fn from_dir(path: impl AsRef<Path>) -> Result<Article> {
-        let workspace = workspace()?;
-        let path = path.as_ref();
-        let category = path
-            .strip_prefix(workspace.join("articles"))
-            .map_err(|_| Error::WorkspaceNotFound)?
-            .parent()
-            .into_iter();
-        let category = category
-            .map(|v| {
-                v.to_str()
-                    .map(String::from)
-                    .ok_or(Error::IllegalCategoryName)
-            })
-            .try_collect()?;
-
-        let content = read_to_string(path.join("article.md"))?;
-
-        let metadata = read_to_string(path.join(".metadata.toml"))?;
-
-        let metadata: Metadata = toml::from_str(&metadata).map_err(Error::InvalidMetadata)?;
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
-
-        let mut parser = pulldown_cmark::Parser::new(&content);
-        let mut title = Vec::new();
-
-        if let Some(Event::Start(Tag::Heading(level, _, _))) = parser.next() {
-            if level == HeadingLevel::H1 {
-                for event in parser.by_ref() {
-                    if let Event::End(Tag::Heading(_, _, _)) = event {
-                        break;
-                    } else {
-                        title.push(event);
-                    }
-                }
+    pub fn description(&self) -> String {
+        let parser = pulldown_cmark::Parser::new(&self.content);
+        let description = String::new();
+        let mut buf = Vec::new();
+        let mut count: u32 = 0;
+        for event in parser {
+            count += count_event(event.clone());
+            if count >= 200 {
+                break;
             }
+            buf.push(event);
         }
 
-        let content = to_html(parser);
-
-        Ok(Article {
-            title: to_html(title),
-            category,
-            content,
-            name,
-            metadata,
-        })
+        description
     }
-
     pub fn preview(&self) -> ArticlePreview {
         ArticlePreview {
             title: self.title.clone(),
-
-            description: preview_description(&self.content),
-
+            description: self.description(),
             metadata: self.metadata.clone(),
-            url: format!(".{}/{}", self.category.join("/"), self.name),
         }
     }
 
-    pub fn render(&self, resource: &BuildResource) -> std::result::Result<String, liquid::Error> {
+    pub fn render(&self, resource: &BuildResource) -> Result<String> {
         let created = self.metadata.created;
-        resource.article_template.render(&object!({
+        Ok(resource.article_template.render(&object!({
             "title":self.title,
             "content":self.content,
             "created":format!("{}.{}.{}",created.year(),created.month() as u8,created.day()),
-            "author":resource.config.author,
+            "author":self.metadata.author,
             "tags":self.metadata.tags,
             "footer":resource.footer,
-        }))
-    }
-}
-
-fn preview_description(content: &str) -> String {
-    let parser = pulldown_cmark::Parser::new(content);
-    let description = String::new();
-    let mut buf = Vec::new();
-    let mut count: u32 = 0;
-    for event in parser {
-        count += count_event(event.clone());
-        if count >= 200 {
-            break;
-        }
-        buf.push(event);
+        }))?)
     }
 
-    description
+    pub fn path(&self) -> PathBuf {
+        let mut path = self.workspace.path().join("articles");
+        path.extend(&self.category);
+        path.push(&self.name);
+        path
+    }
 }
 
 fn count_event(event: pulldown_cmark::Event<'_>) -> u32 {
@@ -136,10 +102,4 @@ fn count_event(event: pulldown_cmark::Event<'_>) -> u32 {
         pulldown_cmark::Event::Text(text) => text.len() as u32,
         _ => 0,
     }
-}
-
-#[test]
-fn test() {
-    let parser = pulldown_cmark::Parser::new("# 233\ntest");
-    println!("{:?}", parser.collect_vec());
 }
