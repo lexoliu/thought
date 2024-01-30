@@ -9,6 +9,8 @@ pub enum Error {
     Templte(#[from] liquid::Error),
     #[error("Workspace already exists")]
     WorkspaceAlreadyExists,
+    #[error("Article not found")]
+    ArticleNotFound,
     #[error("Workspace not found")]
     WorkspaceNotFound,
     #[error("Post already exists")]

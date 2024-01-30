@@ -29,3 +29,13 @@ pub fn render_markdown(markdown: impl AsRef<str>) -> String {
     let parser = pulldown_cmark::Parser::new(markdown.as_ref());
     to_html(parser)
 }
+
+pub fn not_found<T, E: From<std::io::Error>>(original: std::io::Result<T>, to: E) -> Result<T, E> {
+    original.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            to
+        } else {
+            error.into()
+        }
+    })
+}

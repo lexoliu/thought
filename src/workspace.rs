@@ -1,14 +1,6 @@
-use time::OffsetDateTime;
-
-use crate::{
-    article::{Article, Metadata},
-    category::Category,
-    utils::create_file,
-    Config, Error, Result,
-};
+use crate::{article::Article, category::Category, utils::create_file, Config, Error, Result};
 use std::{
-    fs::{create_dir, File},
-    io::{self, Write},
+    fs::create_dir,
     ops::Deref,
     path::{Path, PathBuf},
     process::Command,
@@ -30,32 +22,7 @@ impl Workspace {
     }
 
     pub fn create_article(&self, name: String, category: Category) -> Result<Article> {
-        let mut path = self.path().join("articles");
-        path.extend(&category);
-        path.push(&name);
-        create_dir(&path).map_err(|error| {
-            if error.kind() == io::ErrorKind::AlreadyExists {
-                Error::PostAlreadyExists
-            } else {
-                error.into()
-            }
-        })?;
-
-        let now = OffsetDateTime::now_utc();
-        let metadata = Metadata::new(now, self.config().owner());
-        let mut metadata_file = File::create(path.join(".metadata.toml"))?;
-        metadata_file.write_all(toml::to_string_pretty(&metadata).unwrap().as_bytes())?;
-
-        let mut content = File::create(path.join("article.md"))?;
-        content.write_all("# \n".as_bytes())?;
-        Ok(Article {
-            workspace: self.clone(),
-            title: "".into(),
-            category,
-            content: "".into(),
-            metadata,
-            name,
-        })
+        Article::create(self, name, category)
     }
 }
 

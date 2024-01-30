@@ -1,23 +1,32 @@
-use std::path::PathBuf;
+use std::fs::create_dir;
+use std::io;
+use std::path::Path;
 
 use liquid::object;
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::build::BuildResource;
 use crate::category::Category;
+use crate::utils::{create_file, not_found, read_to_string, to_html};
 use crate::workspace::Workspace;
-use crate::Result;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     #[serde(with = "time::serde::rfc3339")]
-    pub created: OffsetDateTime,
-    pub author: String,
-    pub tags: Vec<String>,
+    created: OffsetDateTime,
+    author: String,
+    tags: Vec<String>,
 }
 
 impl Metadata {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let metadata = not_found(read_to_string(path), Error::ArticleNotFound)?;
+        toml::from_str(&metadata).map_err(Error::InvalidMetadata)
+    }
+
     pub fn new(created: OffsetDateTime, author: impl Into<String>) -> Self {
         Self {
             created,
@@ -26,19 +35,34 @@ impl Metadata {
         }
     }
 
+    pub fn created(&self) -> OffsetDateTime {
+        self.created
+    }
+
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
+    pub fn set_author(&mut self, author: impl Into<String>) {
+        self.author = author.into();
+    }
+
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+
     pub fn add_tag(&mut self, tag: impl Into<String>) {
         self.tags.push(tag.into());
     }
 
     pub fn export(&self) -> String {
-        // Serialization for config never fail, so that we can use `unwrap`
+        // Serialization for config never fail, so that we can use `unwrap` silently.
         toml::to_string_pretty(&self).unwrap()
     }
 }
 
 #[derive(Debug)]
 pub struct Article {
-    pub(crate) workspace: Workspace,
     pub title: String,
     pub category: Category,
     pub content: String,
@@ -54,6 +78,69 @@ pub struct ArticlePreview {
 }
 
 impl Article {
+    pub fn open(workspace: &Workspace, name: String, category: Category) -> Result<Self> {
+        let mut path = workspace.path().to_owned();
+        path.extend(&category);
+        path.push(&name);
+        let content = not_found(
+            read_to_string(path.join("article.md")),
+            Error::ArticleNotFound,
+        )?;
+
+        let metadata = Metadata::open(path.join("metadata.toml"))?;
+        let mut content = Parser::new(&content);
+        let mut title = Vec::new();
+
+        if let Some(Event::Start(Tag::Heading(level, _, _))) = content.next() {
+            if level == HeadingLevel::H1 {
+                for event in content.by_ref() {
+                    if let Event::End(Tag::Heading(_, _, _)) = event {
+                        break;
+                    } else {
+                        title.push(event);
+                    }
+                }
+            }
+        }
+
+        let title = to_html(title);
+        let content = to_html(content);
+
+        Ok(Self {
+            title,
+            category,
+            content,
+            metadata,
+            name,
+        })
+    }
+
+    pub fn create(workspace: &Workspace, name: String, category: Category) -> Result<Self> {
+        let mut path = workspace.path().join("articles");
+        path.extend(&category);
+        path.push(&name);
+
+        create_dir(&path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                Error::PostAlreadyExists
+            } else {
+                error.into()
+            }
+        })?;
+
+        let metadata = Metadata::new(OffsetDateTime::now_utc(), workspace.config().owner());
+        create_file(path.join(".metadata.toml"), metadata.export())?;
+
+        create_file(path.join("article.md"), "# \n")?;
+        Ok(Article {
+            title: "".into(),
+            category,
+            content: "".into(),
+            metadata,
+            name,
+        })
+    }
+
     pub fn description(&self) -> String {
         let parser = pulldown_cmark::Parser::new(&self.content);
         let description = String::new();
@@ -87,13 +174,6 @@ impl Article {
             "tags":self.metadata.tags,
             "footer":resource.footer,
         }))?)
-    }
-
-    pub fn path(&self) -> PathBuf {
-        let mut path = self.workspace.path().join("articles");
-        path.extend(&self.category);
-        path.push(&self.name);
-        path
     }
 }
 
