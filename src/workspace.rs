@@ -22,7 +22,11 @@ impl Workspace {
     }
 
     pub fn create_article(&self, name: String, category: Category) -> Result<Article> {
-        Article::create(self, name, category)
+        Article::create(self.clone(), name, category)
+    }
+
+    pub fn category(&self) -> Category {
+        Category::open(self.clone(), Vec::new())
     }
 }
 

@@ -1,6 +1,6 @@
-use std::fs::create_dir;
-use std::io;
-use std::path::Path;
+use std::fs::{create_dir, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use liquid::object;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
@@ -59,15 +59,20 @@ impl Metadata {
         // Serialization for config never fail, so that we can use `unwrap` silently.
         toml::to_string_pretty(&self).unwrap()
     }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        File::open(path)?.write_all(self.export().as_bytes())
+    }
 }
 
 #[derive(Debug)]
 pub struct Article {
-    pub title: String,
-    pub category: Category,
-    pub content: String,
-    pub metadata: Metadata,
-    pub name: String,
+    workspace: Workspace,
+    title: String,
+    category: Category,
+    content: String,
+    metadata: Metadata,
+    name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,7 +83,7 @@ pub struct ArticlePreview {
 }
 
 impl Article {
-    pub fn open(workspace: &Workspace, name: String, category: Category) -> Result<Self> {
+    pub fn open(workspace: Workspace, name: String, category: Category) -> Result<Self> {
         let mut path = workspace.path().to_owned();
         path.extend(&category);
         path.push(&name);
@@ -107,6 +112,7 @@ impl Article {
         let content = to_html(content);
 
         Ok(Self {
+            workspace,
             title,
             category,
             content,
@@ -115,7 +121,7 @@ impl Article {
         })
     }
 
-    pub fn create(workspace: &Workspace, name: String, category: Category) -> Result<Self> {
+    pub fn create(workspace: Workspace, name: String, category: Category) -> Result<Self> {
         let mut path = workspace.path().join("articles");
         path.extend(&category);
         path.push(&name);
@@ -133,12 +139,21 @@ impl Article {
 
         create_file(path.join("article.md"), "# \n")?;
         Ok(Article {
+            workspace,
             title: "".into(),
             category,
             content: "".into(),
             metadata,
             name,
         })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub const fn category(&self) -> &Category {
+        &self.category
     }
 
     pub fn description(&self) -> String {
@@ -162,6 +177,13 @@ impl Article {
             description: self.description(),
             metadata: self.metadata.clone(),
         }
+    }
+
+    pub fn path(&self) -> PathBuf {
+        let mut path = self.workspace.path().join("articles");
+        path.extend(&self.category);
+        path.push(&self.name);
+        path
     }
 
     pub fn render(&self, resource: &BuildResource) -> Result<String> {
