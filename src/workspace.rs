@@ -1,5 +1,6 @@
-use crate::{category::Category, utils::create_file, Config, Error, Result};
+use crate::{article::Article, category::Category, utils::create_file, Config, Error, Result};
 use std::{
+    env::current_dir,
     fs::create_dir,
     ops::Deref,
     path::{Path, PathBuf},
@@ -13,12 +14,19 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    pub fn current() -> Result<Self> {
+        Self::open(current_dir()?)
+    }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(WorkspaceBuilder::open(path)?.build())
     }
 
     pub fn init(path: impl AsRef<Path>) -> Result<Self> {
         Ok(WorkspaceBuilder::init(path)?.build())
+    }
+
+    pub fn create_article(&self, category: Vec<String>, name: String) -> Result<Article> {
+        Article::create(Category::open(self.clone(), category), name)
     }
 
     pub fn article_path(&self, name: impl AsRef<str>, category: impl AsRef<[String]>) -> PathBuf {

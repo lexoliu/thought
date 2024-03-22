@@ -13,3 +13,11 @@ thiserror = "1.0.56"
 time = { version = "0.3.31", features = ["serde"] }
 toml = "0.8.8"
 whoami = "1.4.1"
+
+clap = { version = "4.4.16", features = ["derive"]}
+env_logger = "0.11.3"
+log = "0.4.21"
+
+[[bin]]
+name = "thought"
+path = "src/cli/main.rs"
