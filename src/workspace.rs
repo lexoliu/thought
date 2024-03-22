@@ -1,4 +1,4 @@
-use crate::{article::Article, category::Category, utils::create_file, Config, Error, Result};
+use crate::{category::Category, utils::create_file, Config, Error, Result};
 use std::{
     fs::create_dir,
     ops::Deref,
@@ -21,8 +21,11 @@ impl Workspace {
         Ok(WorkspaceBuilder::init(path)?.build())
     }
 
-    pub fn create_article(&self, name: String, category: Category) -> Result<Article> {
-        Article::create(self.clone(), name, category)
+    pub fn article_path(&self, name: impl AsRef<str>, category: impl AsRef<[String]>) -> PathBuf {
+        let mut path = self.path().join("articles");
+        path.extend(category.as_ref());
+        path.push(name.as_ref());
+        path
     }
 
     pub fn category(&self) -> Category {

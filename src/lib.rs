@@ -10,3 +10,4 @@ pub use category::Category;
 mod utils;
 pub mod workspace;
 pub use workspace::Workspace;
+pub mod metadata;

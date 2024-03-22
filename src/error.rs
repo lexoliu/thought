@@ -1,3 +1,5 @@
+use std::string::FromUtf8Error;
+
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -21,4 +23,6 @@ pub enum Error {
     InvalidMetadata(toml::de::Error),
     #[error("The name of category must be legal UTF-8 string")]
     IllegalCategoryName,
+    #[error("Path includes illegal character")]
+    Utf8Error(#[from] FromUtf8Error),
 }

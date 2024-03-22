@@ -5,6 +5,7 @@ edition = "2021"
 
 
 [dependencies]
+itertools = "0.12.1"
 liquid = "0.26.4"
 pulldown-cmark = "0.9.3"
 serde = { version = "1.0.195", features = ["derive"] }
