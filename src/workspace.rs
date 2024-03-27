@@ -136,12 +136,14 @@ impl WorkspaceBuilder {
         })
     }
 
-    pub fn set_config(&mut self, config: Config) {
-        self.config = config;
-    }
-
     pub const fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn set_config(&mut self, config: Config) -> Result<()> {
+        config.save(self.path().join("Thought.toml"))?;
+        self.config = config;
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {

@@ -1,6 +1,9 @@
-use std::{fs::File, io::Write, path::Path};
+use std::path::Path;
 
-use crate::{utils::read_to_string, Error, Result};
+use crate::{
+    utils::{create_file, read_to_string, write_file},
+    Error, Result,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -32,7 +35,7 @@ impl ArticleMetadata {
 
     pub fn create(path: impl AsRef<Path>, author: impl Into<String>) -> Result<Self> {
         let metadata = Self::new(author);
-        File::create(path)?.write_all(metadata.export().as_bytes())?;
+        create_file(path, metadata.export())?;
         Ok(metadata)
     }
 
@@ -68,7 +71,8 @@ impl CategoryMetadata {
 
     pub fn create(path: impl AsRef<Path>, name: impl Into<String>) -> Result<Self> {
         let metadata = Self::new(name);
-        File::create(path)?.write_all(metadata.export().as_bytes())?;
+        create_file(path, metadata.export())?;
+
         Ok(metadata)
     }
 
@@ -94,7 +98,8 @@ macro_rules! convenience {
             }
 
             pub fn save(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
-                File::open(path)?.write_all(self.export().as_bytes())
+                write_file(path,self.export())?;
+                Ok(())
             }
         })*
     };

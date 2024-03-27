@@ -1,12 +1,18 @@
 use pulldown_cmark::{html::push_html, Event};
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::{BufReader, Read, Write},
     path::Path,
 };
 
 pub fn create_file(path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> std::io::Result<()> {
     let mut file = File::create(path)?;
+    file.write_all(content.as_ref())?;
+    Ok(())
+}
+
+pub fn write_file(path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
     file.write_all(content.as_ref())?;
     Ok(())
 }

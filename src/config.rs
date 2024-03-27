@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
-use crate::utils::read_to_string;
+use crate::utils::{read_to_string, write_file};
 use serde::{Deserialize, Serialize};
+
 use std::path::Path;
 use whoami::realname;
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -38,5 +39,10 @@ impl Config {
     pub fn export(&self) -> String {
         // Serialization for config never fail, so that we can use `unwrap`
         toml::to_string_pretty(&self).unwrap()
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        write_file(path, self.export())?;
+        Ok(())
     }
 }
