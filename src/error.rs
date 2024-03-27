@@ -1,14 +1,26 @@
-use std::string::FromUtf8Error;
-
+use std::{backtrace::Backtrace, string::FromUtf8Error};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
+
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Inner error: {0}")]
-    Io(#[from] std::io::Error),
+    #[cfg(debug_assertions)]
+    #[error("Inner I/O error: {source}\n Backtrace: {backtrace}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+        backtrace: Backtrace,
+    },
+
+    #[cfg(not(debug_assertions))]
+    #[error("Inner I/O error: {source}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
     #[error("Cannot parse template: {0}")]
-    Templte(#[from] liquid::Error),
+    Templte(#[from] tera::Error),
     #[error("Workspace already exists")]
     WorkspaceAlreadyExists,
     #[error("Article not found")]
@@ -25,4 +37,8 @@ pub enum Error {
     IllegalCategoryName,
     #[error("Path includes illegal character")]
     Utf8Error(#[from] FromUtf8Error),
+    #[error("Almost done...Please install a theme for Thought.")]
+    NeedInstallTemplate,
+    #[error("Cannot found template `{name}`")]
+    TemplateNotFound { name: String },
 }

@@ -1,9 +1,10 @@
+#![feature(error_generic_member_access)]
+
 pub mod error;
 pub use error::{Error, Result};
 pub mod article;
-pub mod build;
-pub use build::BuildResource;
 mod config;
+pub mod generate;
 pub use config::Config;
 mod category;
 pub use category::Category;

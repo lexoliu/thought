@@ -4,14 +4,14 @@ use crate::{utils::read_to_string, Error, Result};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CategoryMetadata {
     #[serde(with = "time::serde::rfc3339")]
     created: OffsetDateTime,
+    name: String,
     #[serde(default)]
     description: String,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleMetadata {
     #[serde(with = "time::serde::rfc3339")]
@@ -21,23 +21,6 @@ pub struct ArticleMetadata {
     author: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
-
-pub enum Metadata {
-    Artcile(ArticleMetadata),
-    Category(CategoryMetadata),
-}
-
-impl Metadata {
-    pub const fn created(&self) -> OffsetDateTime {
-        match self {
-            Metadata::Artcile(metadata) => metadata.created(),
-            Metadata::Category(metadata) => metadata.created(),
-        }
-    }
-}
-
 impl ArticleMetadata {
     pub fn new(author: impl Into<String>) -> Self {
         Self {
@@ -45,6 +28,12 @@ impl ArticleMetadata {
             author: author.into(),
             tags: Vec::new(),
         }
+    }
+
+    pub fn create(path: impl AsRef<Path>, author: impl Into<String>) -> Result<Self> {
+        let metadata = Self::new(author);
+        File::create(path)?.write_all(metadata.export().as_bytes())?;
+        Ok(metadata)
     }
 
     pub const fn created(&self) -> OffsetDateTime {
@@ -69,6 +58,20 @@ impl ArticleMetadata {
 }
 
 impl CategoryMetadata {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            created: OffsetDateTime::now_utc(),
+            name: name.into(),
+            description: String::new(),
+        }
+    }
+
+    pub fn create(path: impl AsRef<Path>, name: impl Into<String>) -> Result<Self> {
+        let metadata = Self::new(name);
+        File::create(path)?.write_all(metadata.export().as_bytes())?;
+        Ok(metadata)
+    }
+
     pub const fn created(&self) -> OffsetDateTime {
         self.created
     }
@@ -97,4 +100,4 @@ macro_rules! convenience {
     };
 }
 
-convenience!(Metadata, ArticleMetadata, CategoryMetadata);
+convenience!(ArticleMetadata, CategoryMetadata);

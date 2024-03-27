@@ -1,8 +1,14 @@
-use crate::{article::Article, category::Category, utils::create_file, Config, Error, Result};
+use crate::{
+    article::{Article, ArticlePreview},
+    category::{Category, ToComponents},
+    generate::generate,
+    metadata::CategoryMetadata,
+    utils::create_file,
+    Config, Error, Result,
+};
 use std::{
     env::current_dir,
-    fs::create_dir,
-    ops::Deref,
+    fs::{create_dir, remove_dir_all},
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
@@ -26,7 +32,7 @@ impl Workspace {
     }
 
     pub fn create_article(&self, category: Vec<String>, name: String) -> Result<Article> {
-        Article::create(Category::open(self.clone(), category), name)
+        Article::create(Category::open(self.clone(), category)?, name)
     }
 
     pub fn article_path(&self, name: impl AsRef<str>, category: impl AsRef<[String]>) -> PathBuf {
@@ -36,15 +42,55 @@ impl Workspace {
         path
     }
 
-    pub fn category(&self) -> Category {
+    pub fn category_path(&self, category: impl AsRef<[String]>) -> PathBuf {
+        let mut path = self.path().join("articles");
+        path.extend(category.as_ref());
+        path
+    }
+
+    pub fn generate_to(&self, output: impl AsRef<Path>) -> Result<()> {
+        generate(self.clone(), output.as_ref())
+    }
+
+    pub fn generate(&self) -> Result<()> {
+        self.generate_to(self.generate_path())
+    }
+
+    pub fn generate_path(&self) -> PathBuf {
+        self.path().join("build")
+    }
+
+    pub fn path(&self) -> &Path {
+        self.inner.path()
+    }
+
+    pub fn config(&self) -> &Config {
+        self.inner.config()
+    }
+
+    pub fn template_path(&self) -> PathBuf {
+        self.inner.template_path()
+    }
+
+    pub fn root(&self) -> Result<Category> {
         Category::open(self.clone(), Vec::new())
     }
-}
 
-impl Deref for Workspace {
-    type Target = WorkspaceBuilder;
-    fn deref(&self) -> &Self::Target {
-        self.inner.deref()
+    pub fn all_articles(&self) -> Result<impl Iterator<Item = Result<ArticlePreview>>> {
+        self.root()?.all_articles()
+    }
+
+    pub fn at(&self, category: impl ToComponents) -> Result<Category> {
+        self.root()?.at(category)
+    }
+
+    pub fn clean(&self) -> Result<()> {
+        let path = self.path().join("build");
+        if path.exists() {
+            remove_dir_all(path)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -57,19 +103,22 @@ pub struct WorkspaceBuilder {
 impl WorkspaceBuilder {
     pub fn init(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
+        create_dir(dir)?;
         if dir.join("Thought.toml").exists() {
             return Err(Error::WorkspaceAlreadyExists);
         }
+
         // TODO: handle the error between git!
         Command::new("git").arg("init").output()?;
 
-        let config = Config::default();
+        let config = Config::new("[INSTALL ONE]");
 
         create_file(dir.join("Thought.toml"), config.export())?;
         create_file(dir.join("footer.md"), "Powered by Thought")?;
         create_file(dir.join(".gitignore"), "/build")?;
         create_dir(dir.join("template"))?;
         create_dir(dir.join("articles"))?;
+        CategoryMetadata::create(dir.join("articles/.category.toml"), "root")?;
         Ok(Self {
             path: dir.to_owned(),
             config,

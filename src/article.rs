@@ -3,19 +3,19 @@ use std::io;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use liquid::object;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
+use serde::Serialize;
 
-use crate::build::BuildResource;
 use crate::category::Category;
 use crate::metadata::ArticleMetadata;
 use crate::utils::{create_file, not_found, read_to_string, to_html};
 use crate::workspace::Workspace;
 use crate::{Error, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Article {
     content: String,
+    #[serde(flatten)]
     preview: ArticlePreview,
 }
 
@@ -26,7 +26,7 @@ impl Deref for Article {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ArticlePreview {
     title: String,
     name: String,
@@ -37,13 +37,14 @@ pub struct ArticlePreview {
 
 impl ArticlePreview {
     pub fn open(category: Category, name: String) -> Result<Self> {
-        let path = category.workspace().article_path(&name, &category);
+        let path = category.workspace().article_path(&name, category.path());
+
         let content = not_found(
             read_to_string(path.join("article.md")),
             Error::ArticleNotFound,
         )?;
 
-        let metadata = ArticleMetadata::open(path.join("metadata.toml"))?;
+        let metadata = ArticleMetadata::open(path.join(".article.toml"))?;
         let mut title = Vec::new();
 
         let mut content = Parser::new(&content);
@@ -118,17 +119,28 @@ impl ArticlePreview {
     }
 
     pub fn path(&self) -> PathBuf {
-        let mut path = self.category.workspace().path().join("articles");
-        path.extend(&self.category);
-        path.push(&self.name);
-        path
+        self.category()
+            .workspace()
+            .article_path(self.name(), self.category().path())
     }
 
     pub fn detail(self) -> Result<Article> {
         let content = read_to_string(self.path().join("article.md"))?;
 
+        let mut content = Parser::new(&content);
+
+        if let Some(Event::Start(Tag::Heading(level, _, _))) = content.next() {
+            if level == HeadingLevel::H1 {
+                for event in content.by_ref() {
+                    if let Event::End(Tag::Heading(_, _, _)) = event {
+                        break;
+                    }
+                }
+            }
+        }
+
         Ok(Article {
-            content,
+            content: to_html(content),
             preview: self,
         })
     }
@@ -141,7 +153,7 @@ impl Article {
 
     pub fn create(category: Category, name: String) -> Result<Self> {
         let workspace = category.workspace();
-        let path = category.workspace().article_path(&name, &category);
+        let path = category.workspace().article_path(&name, category.path());
 
         create_dir(&path).map_err(|error| {
             if error.kind() == io::ErrorKind::AlreadyExists {
@@ -152,7 +164,7 @@ impl Article {
         })?;
 
         let metadata = ArticleMetadata::new(workspace.config().owner());
-        create_file(path.join(".metadata.toml"), metadata.export())?;
+        create_file(path.join(".article.toml"), metadata.export())?;
 
         create_file(path.join("article.md"), "# \n")?;
         Ok(Article {
@@ -178,16 +190,8 @@ impl Article {
         &self.preview.metadata
     }
 
-    pub fn render(&self, resource: &BuildResource) -> Result<String> {
-        let created = self.metadata().created();
-        Ok(resource.article_template.render(&object!({
-            "title":self.title,
-            "content":self.content,
-            "created":format!("{}.{}.{}",created.year(),created.month() as u8,created.day()),
-            "author":self.metadata.author(),
-            "tags":self.metadata.tags(),
-            "footer":resource.footer,
-        }))?)
+    pub fn content(&self) -> &str {
+        &self.content
     }
 }
 

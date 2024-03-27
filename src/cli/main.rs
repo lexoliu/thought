@@ -1,7 +1,10 @@
-mod build;
+mod category;
+mod clean;
+mod generate;
 mod init;
 mod new;
 mod switch;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use itertools::Itertools;
@@ -18,16 +21,27 @@ enum CliCommand {
         name: String,
     },
     New {
-        title: String,
+        name: String,
         category: Option<String>,
     },
-    Build {
+    Generate {
         output: Option<String>,
-        config: Option<String>,
     },
     Switch {
         category: String,
     },
+    Category {
+        category: String,
+        #[command(subcommand)]
+        command: CategoryCommand,
+    },
+    Clean,
+}
+
+#[derive(Subcommand)]
+enum CategoryCommand {
+    New { name: String },
+    Delete,
 }
 
 fn main() {
@@ -41,19 +55,26 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         CliCommand::Init { name } => init::command(name),
-        CliCommand::New { title, category } => new::command(
-            title,
+        CliCommand::New { name, category } => new::command(
+            name,
             category
                 .unwrap_or_default()
                 .split('/')
                 .map(String::from)
                 .collect_vec(),
         ),
-        CliCommand::Build { .. } => build::command(None),
+        CliCommand::Generate { output } => generate::command(output.map(PathBuf::from)),
         CliCommand::Switch { category } => switch::command(category.split('/')),
+        CliCommand::Category { category, command } => match command {
+            CategoryCommand::New { name } => {
+                category::new(category.split('/').map(String::from).collect_vec(), name)
+            }
+            CategoryCommand::Delete => todo!(),
+        },
+        CliCommand::Clean => clean::command(),
     };
 
     if let Err(error) = result {
-        log::error!("{error}")
+        log::error!("{error}");
     }
 }
