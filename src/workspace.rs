@@ -1,7 +1,7 @@
 use crate::{
     article::{Article, ArticlePreview},
     category::{Category, ToComponents},
-    generate::generate,
+    generate::{generate, generate_footer, generate_index, template_engine},
     metadata::CategoryMetadata,
     utils::create_file,
     Config, Error, Result,
@@ -49,7 +49,7 @@ impl Workspace {
     }
 
     pub fn generate_to(&self, output: impl AsRef<Path>) -> Result<()> {
-        generate(self.clone(), output.as_ref())
+        generate(self, output.as_ref())
     }
 
     pub fn generate(&self) -> Result<()> {
@@ -82,6 +82,16 @@ impl Workspace {
 
     pub fn at(&self, category: impl ToComponents) -> Result<Category> {
         self.root()?.at(category)
+    }
+
+    pub fn render_index(&self) -> Result<String> {
+        let engine = template_engine(self)?;
+        let mut site_context = crate::generate::context::Site::new(self, "");
+
+        let footer = generate_footer(&engine, site_context)?;
+        site_context.set_footer(&footer);
+
+        generate_index(&engine, self, site_context)
     }
 
     pub fn clean(&self) -> Result<()> {

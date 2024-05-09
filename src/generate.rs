@@ -1,15 +1,18 @@
 use std::{
-    fs::{create_dir_all, remove_dir_all, File},
-    io::BufWriter,
+    fs::{create_dir_all, remove_dir_all},
     path::Path,
 };
 
-use crate::{utils::render_markdown, Error, Result, Workspace};
+use crate::{
+    article::Article,
+    utils::{create_file, render_markdown},
+    Error, Result, Workspace,
+};
 use copy_dir::copy_dir;
 use itertools::Itertools;
 use tera::{Context, Tera};
 
-mod context {
+pub(crate) mod context {
     use serde::Serialize;
 
     use crate::{article::ArticlePreview, Workspace};
@@ -44,7 +47,7 @@ mod context {
         }
     }
 
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Copy, Serialize)]
     pub struct Site<'a> {
         title: &'a str,
         owner: &'a str,
@@ -67,8 +70,43 @@ mod context {
     }
 }
 
-pub(crate) fn generate(workspace: Workspace, output: &Path) -> Result<()> {
+pub(crate) fn generate_index(
+    engine: &Tera,
+    workspace: &Workspace,
+    site_context: context::Site<'_>,
+) -> Result<String> {
     let mut articles: Vec<_> = workspace.all_articles()?.try_collect()?;
+
+    articles.sort_by_key(|article| article.metadata().created());
+
+    let index = engine.render(
+        "index",
+        &Context::from_serialize(context::Index::new(site_context, &articles)).unwrap(),
+    )?;
+    Ok(index)
+}
+
+pub(crate) fn generate_article(
+    engine: &Tera,
+    site_context: context::Site<'_>,
+    article: &Article,
+) -> Result<String> {
+    let article_context = context::Article::new(article, site_context);
+
+    Ok(engine.render(
+        "article",
+        &Context::from_serialize(article_context).unwrap(),
+    )?)
+}
+
+pub(crate) fn generate_footer(engine: &Tera, site_context: context::Site<'_>) -> Result<String> {
+    Ok(render_markdown(engine.render(
+        "footer",
+        &Context::from_serialize(site_context).unwrap(),
+    )?))
+}
+
+pub(crate) fn template_engine(workspace: &Workspace) -> Result<Tera> {
     if workspace.config().template() == "[INSTALL ONE]" {
         return Err(Error::NeedInstallTemplate);
     }
@@ -89,6 +127,14 @@ pub(crate) fn generate(workspace: Workspace, output: &Path) -> Result<()> {
 
     engine.add_template_file(workspace.path().join("footer.md"), Some("footer"))?;
 
+    Ok(engine)
+}
+
+pub(crate) fn generate(workspace: &Workspace, output: &Path) -> Result<()> {
+    let engine = template_engine(workspace)?;
+
+    let mut articles: Vec<_> = workspace.all_articles()?.try_collect()?;
+
     articles.sort_by_key(|article| article.metadata().created());
 
     let generate_path = workspace.generate_path();
@@ -104,33 +150,28 @@ pub(crate) fn generate(workspace: Workspace, output: &Path) -> Result<()> {
         generate_path.join("assets"),
     )?;
 
-    let mut site_context = context::Site::new(&workspace, "");
-    let footer = render_markdown(engine.render(
-        "footer",
-        &Context::from_serialize(site_context.clone()).unwrap(),
-    )?);
+    let mut site_context = context::Site::new(workspace, "");
+    let footer = generate_footer(&engine, site_context)?;
 
     site_context.set_footer(&footer);
-    engine.render_to(
-        "index",
-        &Context::from_serialize(context::Index::new(site_context.clone(), &articles)).unwrap(),
-        BufWriter::new(File::create(output.join("index.html"))?),
+
+    create_file(
+        output.join("index.html"),
+        generate_index(&engine, workspace, site_context)?,
     )?;
 
     for article in articles {
         let article = article.detail()?;
-
-        let article_context = context::Article::new(&article, site_context.clone());
 
         let mut path = output.to_owned();
         path.extend(article.category().path());
         path.push(article.name());
 
         create_dir_all(&path)?;
-        engine.render_to(
-            "article",
-            &Context::from_serialize(article_context).unwrap(),
-            BufWriter::new(File::create(path.join("index.html"))?),
+
+        create_file(
+            path.join("index.html"),
+            generate_article(&engine, site_context, &article)?,
         )?;
     }
 

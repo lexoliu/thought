@@ -7,6 +7,7 @@ use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
 use serde::Serialize;
 
 use crate::category::Category;
+use crate::generate::{generate_article, generate_footer, template_engine};
 use crate::metadata::ArticleMetadata;
 use crate::utils::{create_file, not_found, read_to_string, to_html};
 use crate::workspace::Workspace;
@@ -192,6 +193,16 @@ impl Article {
 
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    pub fn render(&self) -> Result<String> {
+        let engine = template_engine(self.category().workspace())?;
+        let mut site_context = crate::generate::context::Site::new(self.category().workspace(), "");
+
+        let footer = generate_footer(&engine, site_context)?;
+        site_context.set_footer(&footer);
+
+        generate_article(&engine, site_context, self)
     }
 }
 
