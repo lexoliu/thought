@@ -3,6 +3,7 @@ mod clean;
 mod generate;
 mod init;
 mod new;
+mod serve;
 mod switch;
 use std::path::PathBuf;
 
@@ -36,6 +37,9 @@ enum CliCommand {
         command: CategoryCommand,
     },
     Clean,
+    Serve {
+        port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -72,6 +76,7 @@ fn main() {
             CategoryCommand::Delete => todo!(),
         },
         CliCommand::Clean => clean::command(),
+        CliCommand::Serve { port } => serve::command(port),
     };
 
     if let Err(error) = result {
