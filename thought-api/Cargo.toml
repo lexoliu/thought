@@ -1,0 +1,10 @@
+[package]
+name = "thought-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rkyv = "0.7.44"
+serde = { version = "1.0.201", features = ["derive"] }
+time = { version = "0.3.36", features = ["serde-well-known"] }
+thought-core = { path = "../thought-core"}

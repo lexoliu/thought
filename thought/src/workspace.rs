@@ -23,6 +23,7 @@ impl Workspace {
     pub fn current() -> Result<Self> {
         Self::open(current_dir()?)
     }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(WorkspaceBuilder::open(path)?.build())
     }

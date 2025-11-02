@@ -1,0 +1,12 @@
+[package]
+name = "thought"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+serde = { version = "1.0.201", features = ["derive"] }
+sled = "0.34.7"
+thought-core = { path = "../thought-core"}
+time = { version = "0.3.36", features = ["serde-well-known"] }
+wasmer = "4.2.8"
