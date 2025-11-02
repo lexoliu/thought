@@ -57,26 +57,32 @@ impl Article {
         self.preview
     }
 
+    #[must_use] 
     pub const fn category(&self) -> &Category {
         &self.preview.category
     }
 
+    #[must_use] 
     pub const fn content(&self) -> &str {
         self.content.as_str()
     }
 
+    #[must_use] 
     pub const fn slug(&self) -> &str {
         self.preview.slug.as_str()
     }
 
+    #[must_use] 
     pub const fn title(&self) -> &str {
         self.preview.title.as_str()
     }
 
+    #[must_use] 
     pub const fn description(&self) -> &str {
         self.preview.description.as_str()
     }
 
+    #[must_use] 
     pub const fn metadata(&self) -> &ArticleMetadata {
         &self.preview.metadata
     }

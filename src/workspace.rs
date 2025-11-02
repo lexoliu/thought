@@ -3,9 +3,27 @@ use std::path::PathBuf;
 use smol::stream::{once, Stream};
 use thought_core::{
     article::Article,
-    metadata::{FailToOpenMetadata, MetadataExt, WorkspaceMetadata},
+    metadata::{FailToOpenMetadata, MetadataExt, ThemeSource, WorkspaceMetadata},
 };
 
+/// structure of workspace is as follows:
+/// ```text
+/// /workspace-root
+/// ├── Thought.toml
+/// ├── articles
+/// │   ├── category1
+/// │   │   ├── Article.toml
+/// │   │   ├── article.md
+/// │   │   ├── subcategory1
+/// │   │   │   ├── Article.toml
+/// │   │   │   ├── article.md
+/// │   │   │   ├── image.png
+/// │   ├── category2
+/// │   │   ├── Article.toml
+/// │   │   ├── article.md
+/// │   ├── article.md
+/// │   ├── Article.toml
+/// ```
 #[derive(Clone)]
 pub struct Workspace {
     path: PathBuf,
@@ -26,6 +44,27 @@ impl Workspace {
         })
     }
 
+    pub async fn create(
+        root: impl AsRef<std::path::Path>,
+        title: String,
+        description: String,
+    ) -> Result<Self, std::io::Error> {
+        let metadata_path = root.as_ref().join("Thought.toml");
+        let owner = detect_local_user();
+        let theme = default_theme();
+        let metadata = WorkspaceMetadata::new(title, description, owner, theme);
+        metadata.save_to_file(&metadata_path).await?;
+        Ok(Self {
+            path: root.as_ref().to_path_buf(),
+            metadata,
+        })
+    }
+
+    pub fn set_owner(&mut self, owner: String) {
+        self.metadata.set_owner(owner);
+    }
+
+    #[must_use] 
     pub const fn metadata(&self) -> &WorkspaceMetadata {
         &self.metadata
     }
@@ -52,7 +91,34 @@ impl Workspace {
         todo!()
     }
 
+    pub fn categories(
+        &self,
+    ) -> impl Stream<Item = Result<Self, FailToOpenMetadata>> + Send + Sync {
+        once(todo!())
+    }
+
     pub fn articles(&self) -> impl Stream<Item = Article> + Send + Sync {
         once(todo!())
     }
+
+    pub async fn clean(&self) -> Result<(), std::io::Error> {
+        let build_path = self.path.join("build");
+        if build_path.exists() {
+            smol::fs::remove_dir_all(build_path).await?;
+        }
+
+        let cache_path = self.path.join(".cache");
+        if cache_path.exists() {
+            smol::fs::remove_dir_all(cache_path).await?;
+        }
+        Ok(())
+    }
+}
+
+fn detect_local_user() -> String {
+    whoami::realname()
+}
+
+fn default_theme() -> ThemeSource {
+    ThemeSource::git("zenflow", "https://github.com/lexoliu/zenflow.git", None)
 }

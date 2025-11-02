@@ -23,9 +23,8 @@ smol.workspace = true
 serde.workspace = true
 time.workspace = true
 serde_json.workspace = true
-[[bin]]
-name = "thought"
-path = "src/cli/main.rs"
+whoami = "1.6.1"
+
 
 [profile.release]
 lto = true

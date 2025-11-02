@@ -127,12 +127,97 @@ pub struct WorkspaceMetadata {
     plugins: BTreeMap<String, PluginSource>,
 }
 
+impl WorkspaceMetadata {
+    /// Create a new workspace metadata with the given parameters
+    pub fn new(
+        title: impl Into<String>,
+        description: impl Into<String>,
+        owner: impl Into<String>,
+        theme: ThemeSource,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            description: description.into(),
+            owner: owner.into(),
+            theme,
+            plugins: BTreeMap::new(),
+        }
+    }
+
+    pub fn set_owner(&mut self, owner: impl Into<String>) {
+        self.owner = owner.into();
+    }
+
+    /// Get the title of the workspace
+    #[must_use]
+    pub const fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    /// Get the description of the workspace
+    #[must_use]
+    pub const fn description(&self) -> &str {
+        self.description.as_str()
+    }
+
+    /// Get the owner of the workspace
+    #[must_use]
+    pub const fn owner(&self) -> &str {
+        self.owner.as_str()
+    }
+
+    /// Get the theme source of the workspace
+    #[must_use]
+    pub const fn theme(&self) -> &ThemeSource {
+        &self.theme
+    }
+
+    /// Get the plugins of the workspace
+    #[must_use]
+    pub const fn plugins(&self) -> &BTreeMap<String, PluginSource> {
+        &self.plugins
+    }
+}
+
 /// Source of a theme
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeSource {
     name: String,
     #[serde(flatten)]
     source: PluginSource,
+}
+
+impl ThemeSource {
+    /// Create a new theme source with the given name and source
+    pub fn new(name: impl Into<String>, source: PluginSource) -> Self {
+        Self {
+            name: name.into(),
+            source,
+        }
+    }
+
+    /// Create a new theme source from a Git repository
+    pub fn git(name: impl Into<String>, repo: impl Into<String>, rev: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            source: PluginSource::Git {
+                repo: repo.into(),
+                rev,
+            },
+        }
+    }
+
+    /// Get the name of the theme
+    #[must_use]
+    pub const fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    /// Get the source of the theme
+    #[must_use]
+    pub const fn source(&self) -> &PluginSource {
+        &self.source
+    }
 }
 
 /// Metadata for a plugin
@@ -210,8 +295,12 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
     /// # Errors
     /// Returns an `std::io::Error` if the file cannot be written
     #[cfg(feature = "io")]
-    fn save_to_file(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-        std::fs::write(path, self.to_toml())
+    fn save_to_file(
+        &self,
+        path: impl AsRef<std::path::Path>,
+    ) -> impl Future<Output = Result<(), std::io::Error>> + Send + Sync {
+        let path = path.as_ref().to_path_buf();
+        smol::fs::write(path, self.to_toml())
     }
 }
 

@@ -1,16 +1,8 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use smol::{
-    fs::read_to_string,
-    spawn,
-    stream::{Stream, StreamExt},
-    unblock, Task,
-};
-use thought_core::{
-    article::{self, ArticlePreview},
-    metadata,
-};
+use smol::{fs::read_to_string, spawn, stream::StreamExt, Task};
+use thought_core::article::{self, ArticlePreview};
 use time::OffsetDateTime;
 
 use crate::{plugin::PluginManager, workspace::Workspace};
@@ -38,6 +30,7 @@ struct OutputArticleMetadata {
 }
 
 impl Engine {
+    #[must_use]
     pub fn new(workspace: Workspace) -> Self {
         todo!()
     }
