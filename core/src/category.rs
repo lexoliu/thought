@@ -17,7 +17,7 @@ impl Category {
         Self { path, metadata }
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn path(&self) -> &Vec<String> {
         &self.path
     }

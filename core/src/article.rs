@@ -1,11 +1,11 @@
 use alloc::string::String;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::{category::Category, metadata::ArticleMetadata};
 
 /// An article with its full content
-#[derive(Debug, Clone, Serialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Article {
     content: String, // markdown content
     #[serde(flatten)]
@@ -13,13 +13,39 @@ pub struct Article {
 }
 
 /// A preview of an article without its content
-#[derive(Debug, Clone, Serialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ArticlePreview {
     title: String,
     slug: String,
     category: Category,
     metadata: ArticleMetadata,
     description: String,
+}
+
+impl ArticlePreview {
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+    #[must_use]
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+
+    #[must_use]
+    pub const fn category(&self) -> &Category {
+        &self.category
+    }
+
+    #[must_use]
+    pub const fn metadata(&self) -> &ArticleMetadata {
+        &self.metadata
+    }
+
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
 }
 
 impl Article {
@@ -57,32 +83,32 @@ impl Article {
         self.preview
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn category(&self) -> &Category {
         &self.preview.category
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn content(&self) -> &str {
         self.content.as_str()
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn slug(&self) -> &str {
         self.preview.slug.as_str()
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn title(&self) -> &str {
         self.preview.title.as_str()
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn description(&self) -> &str {
         self.preview.description.as_str()
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn metadata(&self) -> &ArticleMetadata {
         &self.preview.metadata
     }
@@ -207,12 +233,12 @@ mod io {
 
         for event in parser {
             match event {
-                Event::Start(Tag::Heading(level, _, _)) => {
+                Event::Start(Tag::Heading { level, .. }) => {
                     if level == pulldown_cmark::HeadingLevel::H1 && title.is_none() {
                         in_title_heading = true;
                     }
                 }
-                Event::End(Tag::Heading(level, _, _)) => {
+                Event::End(pulldown_cmark::TagEnd::Heading(level)) => {
                     if level == pulldown_cmark::HeadingLevel::H1 && in_title_heading {
                         in_title_heading = false;
                     }
@@ -222,7 +248,7 @@ mod io {
                         in_description_paragraph = true;
                     }
                 }
-                Event::End(Tag::Paragraph) => {
+                Event::End(pulldown_cmark::TagEnd::Paragraph) => {
                     if in_description_paragraph {
                         in_description_paragraph = false;
                         description_found = true;

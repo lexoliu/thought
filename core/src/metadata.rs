@@ -1,12 +1,11 @@
 //! Metadata structures and utilities
 //! This module provides the data structures and traits for working with article and category metadata.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
-use url::Url;
 
 /// Metadata for a category
 ///
@@ -220,19 +219,6 @@ impl ThemeSource {
     }
 }
 
-/// Metadata for a plugin
-///
-/// Each plugin must have its own metadata file named `Plugin.toml`
-/// located in the plugin directory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginMetadata {
-    name: String,
-    author: String,
-    version: String,
-    /// Wasm artifact location, could be a URL or a local path
-    artifact: Url,
-}
-
 /// Source of a plugin
 ///
 /// Plugins can be sourced from different locations, such as crates.io, Git repositories, local paths, or URLs.
@@ -242,7 +228,7 @@ pub struct PluginMetadata {
 pub enum PluginSource {
     /// Plugin from crates.io with the given version
     CratesIo {
-        /// Plugin from crates.io with the given version
+        /// Version requirement (e.g., "0.1", "^1.2.3")
         version: String,
     },
     /// Plugin from a Git repository
@@ -252,8 +238,8 @@ pub enum PluginSource {
         /// Git revision (branch, tag, or commit)
         rev: Option<String>,
     },
-    /// Plugin from a URL
-    Url(Url),
+    /// Plugin from local filesystem
+    Local(PathBuf),
 }
 
 /// Errors that can occur when opening metadata files
@@ -307,4 +293,3 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
 impl MetadataExt for CategoryMetadata {}
 impl MetadataExt for ArticleMetadata {}
 impl MetadataExt for WorkspaceMetadata {}
-impl MetadataExt for PluginMetadata {}

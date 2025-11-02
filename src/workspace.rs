@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use smol::stream::{once, Stream};
+use smol::stream::{Stream, once};
 use thought_core::{
     article::Article,
     metadata::{FailToOpenMetadata, MetadataExt, ThemeSource, WorkspaceMetadata},
@@ -44,6 +44,11 @@ impl Workspace {
         })
     }
 
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     pub async fn create(
         root: impl AsRef<std::path::Path>,
         title: String,
@@ -64,7 +69,7 @@ impl Workspace {
         self.metadata.set_owner(owner);
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn metadata(&self) -> &WorkspaceMetadata {
         &self.metadata
     }
@@ -91,9 +96,7 @@ impl Workspace {
         todo!()
     }
 
-    pub fn categories(
-        &self,
-    ) -> impl Stream<Item = Result<Self, FailToOpenMetadata>> + Send + Sync {
+    pub fn categories(&self) -> impl Stream<Item = Result<Self, FailToOpenMetadata>> + Send + Sync {
         once(todo!())
     }
 
