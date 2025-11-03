@@ -1,9 +1,10 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use smol::{Task, fs::read_to_string, spawn, stream::StreamExt};
 use thought_core::article::{self, ArticlePreview};
 use time::OffsetDateTime;
+use tokio::{fs::read_to_string, spawn, task::JoinHandle};
+use tokio_stream::StreamExt;
 
 use crate::{plugin::PluginManager, workspace::Workspace};
 
@@ -31,9 +32,7 @@ struct OutputArticleMetadata {
 
 impl Engine {
     pub async fn new(workspace: Workspace) -> anyhow::Result<Self> {
-        let plugins = PluginManager::load(&workspace).await?;
-        let inner = EngineInner { workspace, plugins };
-        Ok(Self(Arc::new(inner)))
+        todo!()
     }
 
     #[allow(clippy::missing_panics_doc)]
@@ -68,7 +67,7 @@ impl Engine {
             }
         }
 
-        let mut render_task: Vec<Task<Result<(), std::io::Error>>> = Vec::new();
+        let mut render_task: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
 
         // create rendering index task
 
@@ -113,13 +112,7 @@ impl Engine {
         _articles: &[ArticlePreview],
         output: impl AsRef<Path>,
     ) -> Result<(), std::io::Error> {
-        let content = self
-            .0
-            .plugins
-            .render_article(self.0.workspace.metadata().clone(), article.clone())
-            .await
-            .map_err(std::io::Error::other)?;
-        smol::fs::write(output, content).await
+        todo!()
     }
 
     async fn render_index(
@@ -127,12 +120,6 @@ impl Engine {
         articles: &[ArticlePreview],
         output: impl AsRef<Path>,
     ) -> Result<(), std::io::Error> {
-        let content = self
-            .0
-            .plugins
-            .render_index(self.0.workspace.metadata().clone(), articles.to_vec())
-            .await
-            .map_err(std::io::Error::other)?;
-        smol::fs::write(output, content).await
+        todo!()
     }
 }

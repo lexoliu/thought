@@ -5,24 +5,25 @@ edition = "2024"
 
 [dependencies]
 thought-core.workspace = true
-smol = { workspace = true }
+tokio.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 time = { workspace = true }
-wasmtime = { workspace = true }
-wasmtime-wasi = { workspace = true }
 bincode = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
-url = { workspace = true }
+url.workspace = true
 whoami = { workspace = true }
-reqwest = { version = "0.12.4", features = ["blocking", "json"] }
-git2 = "0.18.1"
+reqwest = { version = "0.12.24", features = ["blocking", "json"] }
+git2 = "0.18.3"
 hex = "0.4.3"
-regex = "1.10"
+regex = "1.12"
 flate2.workspace = true
 tar.workspace = true
+wasmtime = "38.0.3"
+wasmtime-wasi = "38.0.3"
+tokio-stream = "0.1.17"
 
 [workspace]
 members = ["core", "plugin-macro", "themes/zenflow", "plugin"]
@@ -39,18 +40,17 @@ toml = "0.8.23"
 thiserror = "1.0.69"
 url = { version = "2.5.7", features = ["serde"] }
 pulldown-cmark = "0.10.3"
-smol = "2.0.2"
+async-fs = "2.2.0"
+tokio = { version = "1.48.0", features = ["full"]}
 serde_json = "1.0.145"
-wasmtime = "21.0.2"
-wasmtime-wasi = "21.0.2"
 bincode = "1.3.3"
 anyhow = "1.0.100"
 askama = "0.12.1"
-askama_derive = "0.12.1"
-whoami = "1.4.1"
-flate2 = "1.0.28"
-tar = "0.4.40"
-log = "0.4.21"
+askama_derive = "0.12.5"
+whoami = "1.6.1"
+flate2 = "1.1.5"
+tar = "0.4.44"
+log = "0.4.28"
 
 [workspace.lints]
 rust.missing_docs = "warn"

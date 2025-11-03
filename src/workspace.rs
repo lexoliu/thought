@@ -1,10 +1,9 @@
 use std::path::PathBuf;
-
-use smol::stream::{Stream, once};
 use thought_core::{
     article::Article,
     metadata::{FailToOpenMetadata, MetadataExt, ThemeSource, WorkspaceMetadata},
 };
+use tokio_stream::{Stream, once};
 
 /// structure of workspace is as follows:
 /// ```text
@@ -107,12 +106,12 @@ impl Workspace {
     pub async fn clean(&self) -> Result<(), std::io::Error> {
         let build_path = self.path.join("build");
         if build_path.exists() {
-            smol::fs::remove_dir_all(build_path).await?;
+            tokio::fs::remove_dir_all(build_path).await?;
         }
 
         let cache_path = self.path.join(".cache");
         if cache_path.exists() {
-            smol::fs::remove_dir_all(cache_path).await?;
+            tokio::fs::remove_dir_all(cache_path).await?;
         }
         Ok(())
     }

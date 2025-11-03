@@ -10,7 +10,7 @@ toml.workspace = true
 thiserror.workspace = true
 url.workspace = true
 pulldown-cmark.workspace = true
-smol.workspace = true
+async-fs.workspace = true
 sha2 = "0.10.9"
 serde_json.workspace = true
 

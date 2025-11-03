@@ -143,6 +143,7 @@ impl WorkspaceMetadata {
         }
     }
 
+    /// Set the owner of the workspace
     pub fn set_owner(&mut self, owner: impl Into<String>) {
         self.owner = owner.into();
     }
@@ -254,6 +255,19 @@ pub enum FailToOpenMetadata {
     TomlParse(#[from] toml::de::Error),
 }
 
+#[cfg(feature = "io")]
+async fn read_to_string(path: impl AsRef<std::path::Path>) -> Result<String, std::io::Error> {
+    async_fs::read_to_string(path).await
+}
+
+#[cfg(feature = "io")]
+async fn write(
+    path: impl AsRef<std::path::Path>,
+    content: impl AsRef<[u8]>,
+) -> Result<(), std::io::Error> {
+    async_fs::write(path, content).await
+}
+
 /// Extension trait for metadata serialization and file operations
 pub trait MetadataExt: Serialize + DeserializeOwned {
     /// Export the metadata to a TOML string
@@ -266,7 +280,7 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
     ) -> impl Future<Output = Result<Self, FailToOpenMetadata>> + Send + Sync {
         let path = path.as_ref().to_path_buf();
         async move {
-            let content = smol::fs::read_to_string(&path).await?;
+            let content = read_to_string(&path).await?;
             let metadata = toml::from_str(&content)?;
             Ok(metadata)
         }
@@ -286,7 +300,8 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
         path: impl AsRef<std::path::Path>,
     ) -> impl Future<Output = Result<(), std::io::Error>> + Send + Sync {
         let path = path.as_ref().to_path_buf();
-        smol::fs::write(path, self.to_toml())
+        let toml_str = self.to_toml();
+        async move { write(path, toml_str.as_bytes()).await }
     }
 }
 
