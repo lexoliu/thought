@@ -1,6 +1,5 @@
 pub use askama;
 pub use pulldown_cmark;
-
 wit_bindgen::generate!({
     path: "../wit",
     world: "theme-plugin",
@@ -235,4 +234,13 @@ pub mod helpers {
     }
 
     impl std::error::Error for FormatDatetimeError {}
+}
+
+impl From<OffsetDateTime> for types::Timestamp {
+    fn from(datetime: OffsetDateTime) -> Self {
+        Self {
+            seconds: datetime.unix_timestamp(),
+            nanos: datetime.nanosecond(),
+        }
+    }
 }

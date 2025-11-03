@@ -2334,6 +2334,7 @@ dependencies = [
  "sha2",
  "tar",
  "thiserror 1.0.69",
+ "thought-plugin",
  "time",
  "tokio",
  "tokio-stream",

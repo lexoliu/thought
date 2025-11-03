@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::{env::temp_dir, path::Path, sync::Arc};
 use wasmtime::{
     Store,

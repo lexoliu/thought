@@ -27,6 +27,7 @@ futures = "0.3.31"
 sha2 = "0.10.9"
 pulldown-cmark.workspace = true
 toml.workspace = true
+thought-plugin.workspace = true
 
 [workspace]
 members = ["plugin-macro", "themes/zenflow", "plugin"]
