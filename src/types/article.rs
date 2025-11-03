@@ -1,8 +1,7 @@
-use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::{category::Category, metadata::ArticleMetadata};
+use crate::types::{category::Category, metadata::ArticleMetadata};
 
 /// An article with its full content
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -124,7 +123,7 @@ impl Article {
         let mut hasher = sha2::Sha256::new();
         hasher.update(json.as_bytes());
         let result = hasher.finalize();
-        alloc::format!("{result:x}")
+        format!("{result:x}")
     }
 }
 
@@ -135,7 +134,13 @@ mod io {
         vec::Vec,
     };
 
-    use crate::{article::Article, metadata::MetadataExt};
+    use crate::{
+        types::{
+            article::{Article, ArticlePreview},
+            metadata::{ArticleMetadata, MetadataExt},
+        },
+        utils::read_to_string,
+    };
     use pulldown_cmark::{Event, Parser, Tag};
     use time::macros::format_description;
 
@@ -146,7 +151,7 @@ mod io {
         #[error("Article not found")]
         ArticleNotFound,
         #[error("Failed to open metadata")]
-        FailToOpenMetadata(crate::metadata::FailToOpenMetadata),
+        FailToOpenMetadata(crate::types::metadata::FailToOpenMetadata),
     }
 
     impl Article {
@@ -173,11 +178,12 @@ mod io {
                 return Err(FailToOpenArticle::ArticleNotFound);
             }
 
-            let metadata = crate::metadata::ArticleMetadata::open(metadata_path)
+            let metadata = ArticleMetadata::open(metadata_path)
                 .await
                 .map_err(FailToOpenArticle::FailToOpenMetadata)?;
 
-            let content = std::fs::read_to_string(content_path)
+            let content = read_to_string(content_path)
+                .await
                 .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
 
             let slug = path_vec
@@ -186,7 +192,7 @@ mod io {
                 .clone();
 
             let category_path = &path_vec[..path_vec.len() - 1];
-            let category = crate::category::Category::open(root, category_path.to_vec())
+            let category = super::Category::open(root, category_path.to_vec())
                 .await
                 .map_err(|_| FailToOpenArticle::WorkspaceNotFound)?;
 
@@ -194,7 +200,7 @@ mod io {
 
             Ok(Self {
                 content: extraction.content.to_string(),
-                preview: crate::article::ArticlePreview {
+                preview: ArticlePreview {
                     title: extraction.title.unwrap_or_else(|| {
                         // use date of created as title
                         let format = format_description!(

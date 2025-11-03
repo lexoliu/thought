@@ -1,6 +1,5 @@
 pub use askama;
 pub use pulldown_cmark;
-pub use thought_core;
 
 wit_bindgen::generate!({
     path: "../wit",

@@ -1,7 +1,6 @@
-use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::CategoryMetadata;
+use crate::types::metadata::CategoryMetadata;
 
 /// A category in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,15 +27,14 @@ impl Category {
     }
 }
 
-#[cfg(feature = "io")]
 mod io {
     use std::{path::Path, string::String, vec::Vec};
 
     use thiserror::Error;
 
-    use crate::{
+    use crate::types::{
         category::Category,
-        metadata::{CategoryMetadata, MetadataExt},
+        metadata::{CategoryMetadata, FailToOpenMetadata, MetadataExt},
     };
 
     #[derive(Debug, Error)]
@@ -45,7 +43,7 @@ mod io {
         WorkspaceNotFound,
 
         #[error("Failed to open category metadata: {0}")]
-        FailToOpenMetadata(#[from] crate::metadata::FailToOpenMetadata),
+        FailToOpenMetadata(#[from] FailToOpenMetadata),
     }
 
     impl Category {

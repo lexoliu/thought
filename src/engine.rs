@@ -2,12 +2,15 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
-use thought_core::article::{self, ArticlePreview};
 use time::OffsetDateTime;
 use tokio::{fs::read_to_string, spawn};
 use tokio_stream::StreamExt;
 
-use crate::{plugin::PluginManager, workspace::Workspace};
+use crate::{
+    plugin::PluginManager,
+    types::article::{Article, ArticlePreview},
+    workspace::Workspace,
+};
 
 /// The engine that powers Thought
 #[derive(Clone)]
@@ -103,7 +106,7 @@ impl Engine {
 
     async fn render_article(
         &self,
-        article: &article::Article,
+        article: &Article,
         _articles: &[ArticlePreview],
         output: impl AsRef<Path>,
     ) -> Result<(), std::io::Error> {

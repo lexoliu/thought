@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thought-core.workspace = true
 pulldown-cmark.workspace = true
 askama.workspace = true
 askama_derive.workspace = true

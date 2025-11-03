@@ -7,12 +7,12 @@ use wasmtime::{
 
 use wasmtime_wasi::{DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxView, WasiView};
 
-use crate::workspace::Workspace;
-use thought_core::{
+use crate::types::{
     article::{Article, ArticlePreview},
     category::Category,
     metadata::{ArticleMetadata, CategoryMetadata},
 };
+use crate::workspace::Workspace;
 use time::OffsetDateTime;
 
 mod bindings {
@@ -56,9 +56,9 @@ struct ThemeRuntime {
 }
 
 impl ThemeRuntime {
-    pub async fn new(name: String, binary: &[u8]) -> Result<Self> {
+    pub fn new(name: String, binary: &[u8]) -> Result<Self> {
         let mut config = wasmtime::Config::new();
-        config.async_support(true);
+        config.async_support(false);
         let engine = wasmtime::Engine::new(&config)?;
         let component = Component::new(&engine, binary)?;
         let mut store = Store::new(&engine, ());
@@ -71,7 +71,7 @@ impl ThemeRuntime {
         })
     }
 
-    pub async fn generate_page(&mut self, article: &Article) -> Result<String> {
+    pub fn generate_page(&mut self, article: &Article) -> Result<String> {
         let input = convert::article(article);
         let result = self
             .bindings
@@ -80,7 +80,7 @@ impl ThemeRuntime {
         Ok(result)
     }
 
-    pub async fn generate_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
+    pub fn generate_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
         let input: Vec<_> = articles.iter().map(convert::article_preview).collect();
         let result = self
             .bindings

@@ -3,9 +3,10 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
+
+use crate::utils::{read_to_string, write};
 
 /// Metadata for a category
 ///
@@ -256,7 +257,6 @@ pub enum PluginSource {
 }
 
 /// Errors that can occur when opening metadata files
-#[cfg(feature = "io")]
 #[derive(Debug, thiserror::Error)]
 pub enum FailToOpenMetadata {
     /// I/O error
@@ -267,26 +267,12 @@ pub enum FailToOpenMetadata {
     TomlParse(#[from] toml::de::Error),
 }
 
-#[cfg(feature = "io")]
-async fn read_to_string(path: impl AsRef<std::path::Path>) -> Result<String, std::io::Error> {
-    async_fs::read_to_string(path).await
-}
-
-#[cfg(feature = "io")]
-async fn write(
-    path: impl AsRef<std::path::Path>,
-    content: impl AsRef<[u8]>,
-) -> Result<(), std::io::Error> {
-    async_fs::write(path, content).await
-}
-
 /// Extension trait for metadata serialization and file operations
 pub trait MetadataExt: Serialize + DeserializeOwned {
     /// Export the metadata to a TOML string
     ///
     /// # Errors
     /// Returns an `std::io::Error` if the file cannot be read or parsed
-    #[cfg(feature = "io")]
     fn open(
         path: impl AsRef<std::path::Path>,
     ) -> impl Future<Output = Result<Self, FailToOpenMetadata>> + Send + Sync {
@@ -306,7 +292,6 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
     /// Save the metadata to a file at the given path
     /// # Errors
     /// Returns an `std::io::Error` if the file cannot be written
-    #[cfg(feature = "io")]
     fn save_to_file(
         &self,
         path: impl AsRef<std::path::Path>,

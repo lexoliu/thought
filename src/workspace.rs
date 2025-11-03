@@ -1,8 +1,8 @@
-use std::path::PathBuf;
-use thought_core::{
+use crate::types::{
     article::Article,
     metadata::{FailToOpenMetadata, MetadataExt, ThemeSource, WorkspaceMetadata},
 };
+use std::path::PathBuf;
 use tokio_stream::{Stream, once};
 
 /// structure of workspace is as follows:
@@ -84,7 +84,7 @@ impl Workspace {
     pub async fn create_article(
         &self,
         path: impl Into<Vec<String>>,
-    ) -> Result<thought_core::article::Article, FailToCreateCategory> {
+    ) -> Result<Article, FailToCreateCategory> {
         todo!()
     }
 
