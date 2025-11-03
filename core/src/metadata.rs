@@ -113,6 +113,18 @@ impl CategoryMetadata {
     pub const fn created(&self) -> OffsetDateTime {
         self.created
     }
+
+    /// Get the name of the category
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    /// Get the description of the category
+    #[must_use]
+    pub fn description(&self) -> &str {
+        self.description.as_str()
+    }
 }
 
 /// Metadata for a workspace (your entire blog)

@@ -1,0 +1,50 @@
+package thought:plugin;
+
+interface types {
+    record timestamp {
+        seconds: s64,
+        nanos: u32,
+    }
+
+    record category-metadata {
+        created: timestamp,
+        name: string,
+        description: string,
+    }
+
+    record category {
+        path: list<string>,
+        metadata: category-metadata,
+    }
+
+    record article-metadata {
+        created: timestamp,
+        tags: list<string>,
+        author: string,
+        description: option<string>,
+    }
+
+    record article-preview {
+        title: string,
+        slug: string,
+        category: category,
+        metadata: article-metadata,
+        description: string,
+    }
+
+    record article {
+        preview: article-preview,
+        content: string,
+    }
+}
+
+interface theme {
+    use types.{article, article-preview};
+
+    generate-page: func(article: article) -> string;
+    generate-index: func(articles: list<article-preview>) -> string;
+}
+
+world theme-plugin {
+    export theme;
+}

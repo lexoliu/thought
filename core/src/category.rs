@@ -21,6 +21,11 @@ impl Category {
     pub const fn path(&self) -> &Vec<String> {
         &self.path
     }
+
+    #[must_use]
+    pub const fn metadata(&self) -> &CategoryMetadata {
+        &self.metadata
+    }
 }
 
 #[cfg(feature = "io")]

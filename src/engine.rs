@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use serde::{Deserialize, Serialize};
 use thought_core::article::{self, ArticlePreview};
 use time::OffsetDateTime;
-use tokio::{fs::read_to_string, spawn, task::JoinHandle};
+use tokio::fs::read_to_string;
 use tokio_stream::StreamExt;
 
 use crate::{plugin::PluginManager, workspace::Workspace};
@@ -67,40 +67,16 @@ impl Engine {
             }
         }
 
-        let mut render_task: Vec<JoinHandle<Result<(), std::io::Error>>> = Vec::new();
-
-        // create rendering index task
-
-        let index_task = {
-            let articles_preview = articles_preview.clone();
-            let output = output.clone();
-            let engine = self.clone();
-            spawn(async move {
-                engine
-                    .render_index(&articles_preview, output.join("index.html"))
-                    .await
-            })
-        };
-        render_task.push(index_task);
+        self.render_index(&articles_preview, output.join("index.html"))
+            .await?;
 
         for article in changed_articles {
-            let articles_preview = articles_preview.clone();
-            let output = output.clone();
-            let engine = self.clone();
-            render_task.push(spawn(async move {
-                engine
-                    .render_article(
-                        &article,
-                        &articles_preview,
-                        output.join(format!("{}.html", article.slug())),
-                    )
-                    .await
-            }));
-        }
-
-        // wait for all render task to finish
-        for task in render_task {
-            task.await?;
+            self.render_article(
+                &article,
+                &articles_preview,
+                output.join(format!("{}.html", article.slug())),
+            )
+            .await?;
         }
 
         Ok(())

@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thought-plugin-macro.workspace = true
 thought-core.workspace = true
 pulldown-cmark.workspace = true
 askama.workspace = true
 askama_derive.workspace = true
+time.workspace = true
+wit-bindgen = "0.46.0"

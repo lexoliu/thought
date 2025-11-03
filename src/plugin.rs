@@ -1,30 +1,73 @@
-use anyhow::{Context, Result};
-use core::sync::atomic::{AtomicBool, AtomicUsize};
-use std::{
-    collections::{BTreeMap, HashSet},
-    env::temp_dir,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
-    thread::spawn,
+use anyhow::{Result, anyhow};
+use std::{env::temp_dir, path::Path};
+use wasmtime::{
+    Store,
+    component::{Component, Instance, Linker},
 };
-use thought_core::{
-    article::{Article, ArticlePreview},
-    metadata::{PluginSource, WorkspaceMetadata},
-};
-use tokio::io::AsyncWrite;
-use wasmtime::{Module, Store, component::Linker};
 
-use url::Url;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, p2::add_to_linker_async};
+use wasmtime_wasi::{DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxView, WasiView};
 
 use crate::workspace::Workspace;
+use thought_core::{
+    article::{Article, ArticlePreview},
+    category::Category,
+    metadata::{ArticleMetadata, CategoryMetadata},
+};
+use time::OffsetDateTime;
+
+mod bindings {
+    wasmtime::component::bindgen!({
+        path: "wit",
+        world: "theme-plugin",
+    });
+}
+
+use bindings::ThemePlugin;
 
 /// Manages Wasm plugins, including loading and running them.
 pub struct PluginManager {
     workspace: Workspace,
+    theme: Option<ThemeRuntime>,
 }
 
-impl PluginManager {}
+impl PluginManager {
+    pub fn new(workspace: Workspace) -> Self {
+        Self {
+            workspace,
+            theme: None,
+        }
+    }
+
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspace
+    }
+
+    pub async fn load_theme_from_binary(
+        &mut self,
+        name: impl Into<String>,
+        binary: &[u8],
+    ) -> Result<()> {
+        let runtime = ThemeRuntime::new(name.into(), binary).await?;
+        self.theme = Some(runtime);
+        Ok(())
+    }
+
+    pub async fn render_page(&mut self, article: &Article) -> Result<String> {
+        let theme = self
+            .theme
+            .as_mut()
+            .ok_or_else(|| anyhow!("theme runtime not initialized"))?;
+        theme.generate_page(article).await
+    }
+
+    pub async fn render_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
+        let theme = self
+            .theme
+            .as_mut()
+            .ok_or_else(|| anyhow!("theme runtime not initialized"))?;
+        theme.generate_index(articles).await
+    }
+}
 
 /// Represents a runtime instance of a theme plugin.
 ///
@@ -33,12 +76,131 @@ impl PluginManager {}
 /// Theme runtime has no access to filesystem,time,random,or network.
 struct ThemeRuntime {
     name: String,
+    store: Store<ThemeRuntimeState>,
+    bindings: ThemePlugin,
 }
 
 impl ThemeRuntime {
-    pub fn new(name: String, binary: &[u8]) -> Self {
-        let engine = wasmtime::Engine::default();
-        todo!()
+    pub async fn new(name: String, binary: &[u8]) -> Result<Self> {
+        let mut config = wasmtime::Config::new();
+        config.async_support(true);
+        let engine = wasmtime::Engine::new(&config)?;
+        let component = Component::new(&engine, binary)?;
+        let state = ThemeRuntimeState::default();
+        let mut store = Store::new(&engine, state);
+        let mut linker = Linker::new(&engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        let bindings = ThemePlugin::instantiate(&mut store, &component, &linker)?;
+
+        Ok(Self {
+            name,
+            store,
+            bindings,
+        })
+    }
+
+    pub async fn generate_page(&mut self, article: &Article) -> Result<String> {
+        let input = convert::article(article);
+        let result = self
+            .bindings
+            .thought_plugin_theme()
+            .call_generate_page(&mut self.store, &input)?;
+        Ok(result.into())
+    }
+
+    pub async fn generate_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
+        let input: Vec<_> = articles.iter().map(convert::article_preview).collect();
+        let result = self
+            .bindings
+            .thought_plugin_theme()
+            .call_generate_index(&mut self.store, &input)?;
+        Ok(result.into())
+    }
+}
+
+struct ThemeRuntimeState {
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl Default for ThemeRuntimeState {
+    fn default() -> Self {
+        Self {
+            wasi: WasiCtx::builder().build(),
+            table: ResourceTable::new(),
+        }
+    }
+}
+
+impl WasiView for ThemeRuntimeState {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+mod convert {
+    use super::{
+        Article, ArticleMetadata, ArticlePreview, Category, CategoryMetadata, OffsetDateTime,
+        bindings,
+    };
+    use std::borrow::ToOwned;
+
+    type WitTimestamp = bindings::thought::plugin::types::Timestamp;
+    type WitCategoryMetadata = bindings::thought::plugin::types::CategoryMetadata;
+    type WitCategory = bindings::thought::plugin::types::Category;
+    type WitArticleMetadata = bindings::thought::plugin::types::ArticleMetadata;
+    type WitArticlePreview = bindings::thought::plugin::types::ArticlePreview;
+    type WitArticle = bindings::thought::plugin::types::Article;
+
+    pub fn article(article: &Article) -> WitArticle {
+        WitArticle {
+            preview: article_preview(article.preview()),
+            content: article.content().to_owned(),
+        }
+    }
+
+    pub fn article_preview(preview: &ArticlePreview) -> WitArticlePreview {
+        WitArticlePreview {
+            title: preview.title().to_owned(),
+            slug: preview.slug().to_owned(),
+            category: category(preview.category()),
+            metadata: article_metadata(preview.metadata()),
+            description: preview.description().to_owned(),
+        }
+    }
+
+    fn category(category: &Category) -> WitCategory {
+        WitCategory {
+            path: category.path().clone(),
+            metadata: category_metadata(category.metadata()),
+        }
+    }
+
+    fn category_metadata(metadata: &CategoryMetadata) -> WitCategoryMetadata {
+        WitCategoryMetadata {
+            created: timestamp(metadata.created()),
+            name: metadata.name().to_owned(),
+            description: metadata.description().to_owned(),
+        }
+    }
+
+    fn article_metadata(metadata: &ArticleMetadata) -> WitArticleMetadata {
+        WitArticleMetadata {
+            created: timestamp(metadata.created()),
+            tags: metadata.tags().to_vec(),
+            author: metadata.author().to_owned(),
+            description: metadata.description().map(ToOwned::to_owned),
+        }
+    }
+
+    fn timestamp(value: OffsetDateTime) -> WitTimestamp {
+        WitTimestamp {
+            seconds: value.unix_timestamp(),
+            nanos: value.nanosecond(),
+        }
     }
 }
 
@@ -59,9 +221,55 @@ impl ThemeRuntime {
 ///
 /// ## Network
 /// Network access is not supported by now. It is planned to be added in the future.
-struct PluginRuntime {
+pub struct PluginRuntime {
     name: String,
-    enable_network: bool,
+    store: Store<PluginRuntimeState>,
+    _instance: Instance,
+}
+
+struct PluginRuntimeState {
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl PluginRuntimeState {
+    pub fn new(
+        name: &str,
+        cache_path: &Path,
+        assets_path: &Path,
+        build_path: Option<&Path>,
+    ) -> Result<Self> {
+        let mut wasi = WasiCtx::builder();
+
+        let tmp_dir = temp_dir().join("thought-plugins").join(name);
+        let cache_dir = cache_path.join("thought-plugins").join(name);
+
+        std::fs::create_dir_all(&tmp_dir)?;
+        std::fs::create_dir_all(&cache_dir)?;
+
+        wasi.preopened_dir(&tmp_dir, "/tmp", DirPerms::all(), FilePerms::all())?;
+        wasi.preopened_dir(&cache_dir, "/cache", DirPerms::all(), FilePerms::all())?;
+        wasi.preopened_dir(assets_path, "/assets", DirPerms::READ, FilePerms::READ)?;
+
+        if let Some(build_path) = build_path {
+            std::fs::create_dir_all(build_path)?;
+            wasi.preopened_dir(build_path, "/build", DirPerms::all(), FilePerms::all())?;
+        }
+
+        Ok(Self {
+            wasi: wasi.build(),
+            table: ResourceTable::new(),
+        })
+    }
+}
+
+impl WasiView for PluginRuntimeState {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
 }
 
 impl PluginRuntime {
@@ -71,40 +279,23 @@ impl PluginRuntime {
         cache_path: &Path,
         assets_path: &Path,
         build_path: Option<&Path>,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
-        let engine = wasmtime::Engine::new(&config).expect("Failed to create Wasmtime engine");
+        let engine = wasmtime::Engine::new(&config)?;
 
-        let mut wasi = WasiCtx::builder();
+        let state = PluginRuntimeState::new(&name, cache_path, assets_path, build_path)?;
+        let component = Component::new(&engine, binary)?;
+        let mut linker: Linker<PluginRuntimeState> = Linker::new(&engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
 
-        let tmp_dir = temp_dir().join("thought-plugins").join(&name);
-        let cache_dir = cache_path.join("thought-plugins").join(&name);
+        let mut store = Store::new(&engine, state);
+        let instance = linker.instantiate_async(&mut store, &component).await?;
 
-        wasi.preopened_dir(tmp_dir, "/tmp", DirPerms::all(), FilePerms::all());
-        wasi.preopened_dir(cache_dir, "/cache", DirPerms::all(), FilePerms::all());
-        wasi.preopened_dir(assets_path, "/assets", DirPerms::READ, FilePerms::READ);
-
-        if let Some(build_path) = build_path {
-            wasi.preopened_dir(build_path, "/build", DirPerms::all(), FilePerms::all());
-        }
-
-        let module = Module::new(&engine, binary).expect("Failed to create Wasm module");
-
-        let mut store = Store::new(&engine, wasi);
-
-        todo!()
-    }
-
-    pub fn attach_assets_path(&mut self, path: impl AsRef<Path>) {
-        todo!()
-    }
-
-    pub fn attach_build_path(&mut self, path: impl AsRef<Path>) {
-        todo!()
-    }
-
-    pub fn enable_network(&mut self) {
-        self.enable_network = true;
+        Ok(Self {
+            name,
+            store,
+            _instance: instance,
+        })
     }
 }
