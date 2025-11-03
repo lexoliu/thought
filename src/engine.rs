@@ -1,9 +1,10 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use thought_core::article::{self, ArticlePreview};
 use time::OffsetDateTime;
-use tokio::fs::read_to_string;
+use tokio::{fs::read_to_string, spawn};
 use tokio_stream::StreamExt;
 
 use crate::{plugin::PluginManager, workspace::Workspace};
@@ -67,17 +68,35 @@ impl Engine {
             }
         }
 
-        self.render_index(&articles_preview, output.join("index.html"))
-            .await?;
+        let mut tasks = Vec::with_capacity(changed_articles.len() + 1);
+
+        {
+            let engine = self.clone();
+            let articles_preview = articles_preview.clone();
+            let output = output.clone();
+            tasks.push(spawn(async move {
+                engine
+                    .render_index(&articles_preview, output.join("index.html"))
+                    .await
+            }));
+        }
 
         for article in changed_articles {
-            self.render_article(
-                &article,
-                &articles_preview,
-                output.join(format!("{}.html", article.slug())),
-            )
-            .await?;
+            let engine = self.clone();
+            let articles_preview = articles_preview.clone();
+            let output = output.clone();
+            tasks.push(spawn(async move {
+                engine
+                    .render_article(
+                        &article,
+                        &articles_preview,
+                        output.join(format!("{}.html", article.slug())),
+                    )
+                    .await
+            }));
         }
+
+        try_join_all(tasks).await?;
 
         Ok(())
     }

@@ -2435,6 +2435,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "flate2",
+ "futures",
  "git2",
  "hex",
  "log",

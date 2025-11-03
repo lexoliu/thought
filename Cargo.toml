@@ -24,6 +24,7 @@ tar.workspace = true
 wasmtime = "38.0.3"
 wasmtime-wasi = "38.0.3"
 tokio-stream = "0.1.17"
+futures = "0.3.31"
 
 [workspace]
 members = ["core", "plugin-macro", "themes/zenflow", "plugin"]

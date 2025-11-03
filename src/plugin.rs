@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use std::{env::temp_dir, path::Path};
+use std::{env::temp_dir, path::Path, sync::Arc};
 use wasmtime::{
     Store,
     component::{Component, Instance, Linker},
@@ -27,45 +27,20 @@ use bindings::ThemePlugin;
 /// Manages Wasm plugins, including loading and running them.
 pub struct PluginManager {
     workspace: Workspace,
-    theme: Option<ThemeRuntime>,
+    theme: Arc<ThemeRuntime>,
 }
 
 impl PluginManager {
     pub fn new(workspace: Workspace) -> Self {
-        Self {
-            workspace,
-            theme: None,
-        }
+        todo!()
     }
 
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
     }
 
-    pub async fn load_theme_from_binary(
-        &mut self,
-        name: impl Into<String>,
-        binary: &[u8],
-    ) -> Result<()> {
-        let runtime = ThemeRuntime::new(name.into(), binary).await?;
-        self.theme = Some(runtime);
-        Ok(())
-    }
-
-    pub async fn render_page(&mut self, article: &Article) -> Result<String> {
-        let theme = self
-            .theme
-            .as_mut()
-            .ok_or_else(|| anyhow!("theme runtime not initialized"))?;
-        theme.generate_page(article).await
-    }
-
-    pub async fn render_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
-        let theme = self
-            .theme
-            .as_mut()
-            .ok_or_else(|| anyhow!("theme runtime not initialized"))?;
-        theme.generate_index(articles).await
+    pub fn theme_runtime(&self) -> Arc<ThemeRuntime> {
+        self.theme.clone()
     }
 }
 
@@ -76,8 +51,8 @@ impl PluginManager {
 /// Theme runtime has no access to filesystem,time,random,or network.
 struct ThemeRuntime {
     name: String,
-    store: Store<ThemeRuntimeState>,
     bindings: ThemePlugin,
+    store: Store<()>,
 }
 
 impl ThemeRuntime {
@@ -86,16 +61,13 @@ impl ThemeRuntime {
         config.async_support(true);
         let engine = wasmtime::Engine::new(&config)?;
         let component = Component::new(&engine, binary)?;
-        let state = ThemeRuntimeState::default();
-        let mut store = Store::new(&engine, state);
-        let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        let mut store = Store::new(&engine, ());
+        let linker = Linker::new(&engine);
         let bindings = ThemePlugin::instantiate(&mut store, &component, &linker)?;
-
         Ok(Self {
             name,
-            store,
             bindings,
+            store,
         })
     }
 
@@ -105,7 +77,7 @@ impl ThemeRuntime {
             .bindings
             .thought_plugin_theme()
             .call_generate_page(&mut self.store, &input)?;
-        Ok(result.into())
+        Ok(result)
     }
 
     pub async fn generate_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
@@ -114,30 +86,7 @@ impl ThemeRuntime {
             .bindings
             .thought_plugin_theme()
             .call_generate_index(&mut self.store, &input)?;
-        Ok(result.into())
-    }
-}
-
-struct ThemeRuntimeState {
-    wasi: WasiCtx,
-    table: ResourceTable,
-}
-
-impl Default for ThemeRuntimeState {
-    fn default() -> Self {
-        Self {
-            wasi: WasiCtx::builder().build(),
-            table: ResourceTable::new(),
-        }
-    }
-}
-
-impl WasiView for ThemeRuntimeState {
-    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
-        }
+        Ok(result)
     }
 }
 
