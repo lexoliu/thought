@@ -171,5 +171,5 @@ impl Engine {
 }
 
 fn to_io_error(err: impl std::fmt::Display) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err.to_string())
+    io::Error::other(err.to_string())
 }

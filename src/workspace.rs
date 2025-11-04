@@ -154,9 +154,7 @@ impl Workspace {
 
         let category = Category::open(&self.path, category_path.clone())
             .await
-            .map_err(|err| {
-                FailToCreateCategory::Io(io::Error::new(io::ErrorKind::Other, err.to_string()))
-            })?;
+            .map_err(|err| FailToCreateCategory::Io(io::Error::other(err.to_string())))?;
 
         Ok(Article::new(
             title, slug, category, metadata, summary, content,
@@ -169,7 +167,7 @@ impl Workspace {
     ) -> Result<(), std::io::Error> {
         let engine = Engine::new(self.clone())
             .await
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+            .map_err(|err| io::Error::other(err.to_string()))?;
         engine.generate(output).await
     }
 
@@ -185,7 +183,7 @@ impl Workspace {
             }
         };
 
-        tokio_stream::iter(paths.into_iter()).then(move |path| {
+        tokio_stream::iter(paths).then(move |path| {
             let root = root.clone();
             async move {
                 let metadata_path = path
@@ -208,7 +206,7 @@ impl Workspace {
             }
         };
 
-        tokio_stream::iter(paths.into_iter())
+        tokio_stream::iter(paths)
             .then(move |path| {
                 let root = root.clone();
                 async move { Article::open(&root, path).await.ok() }
@@ -232,18 +230,18 @@ impl Workspace {
                 self.metadata.description().to_owned(),
             );
             metadata.save_to_file(&root_metadata_path).await?;
-        } else if let Some(desc) = description {
-            if path.is_empty() {
-                let existing = CategoryMetadata::open(&root_metadata_path)
-                    .await
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-                let updated = CategoryMetadata::from_raw(
-                    existing.created(),
-                    existing.name().to_owned(),
-                    desc.to_owned(),
-                );
-                updated.save_to_file(&root_metadata_path).await?;
-            }
+        } else if let Some(desc) = description
+            && path.is_empty()
+        {
+            let existing = CategoryMetadata::open(&root_metadata_path)
+                .await
+                .map_err(|err| io::Error::other(err.to_string()))?;
+            let updated = CategoryMetadata::from_raw(
+                existing.created(),
+                existing.name().to_owned(),
+                desc.to_owned(),
+            );
+            updated.save_to_file(&root_metadata_path).await?;
         }
 
         let mut current = articles_root;
@@ -252,18 +250,18 @@ impl Workspace {
             tokio::fs::create_dir_all(&current).await?;
             let metadata_path = current.join("Category.toml");
             if tokio::fs::try_exists(&metadata_path).await? {
-                if index == path.len() - 1 {
-                    if let Some(desc) = description {
-                        let existing = CategoryMetadata::open(&metadata_path)
-                            .await
-                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-                        let updated = CategoryMetadata::from_raw(
-                            existing.created(),
-                            existing.name().to_owned(),
-                            desc.to_owned(),
-                        );
-                        updated.save_to_file(&metadata_path).await?;
-                    }
+                if index == path.len() - 1
+                    && let Some(desc) = description
+                {
+                    let existing = CategoryMetadata::open(&metadata_path)
+                        .await
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    let updated = CategoryMetadata::from_raw(
+                        existing.created(),
+                        existing.name().to_owned(),
+                        desc.to_owned(),
+                    );
+                    updated.save_to_file(&metadata_path).await?;
                 }
             } else {
                 let desc = if index == path.len() - 1 {
@@ -364,7 +362,7 @@ fn collect_article_paths(root: &Path) -> io::Result<Vec<Vec<String>>> {
 fn slug_to_title(slug: &str) -> String {
     let mut words = Vec::new();
 
-    for word in slug.split(|c: char| matches!(c, '-' | '_' | ' ')) {
+    for word in slug.split(['-', '_', ' ']) {
         if word.is_empty() {
             continue;
         }

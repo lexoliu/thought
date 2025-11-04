@@ -30,12 +30,11 @@ toml.workspace = true
 thought-plugin.workspace = true
 
 [workspace]
-members = ["plugin-macro", "themes/zenflow", "plugin"]
+members = ["themes/zenflow", "plugin"]
 resolver = "2"
 
 [workspace.dependencies]
 thought = { path = "." }
-thought-plugin-macro = { path = "plugin-macro" }
 thought-plugin = { path = "plugin" }
 serde = { version = "1.0.228", features = ["derive"] }
 time = { version = "0.3.44", features = ["serde-well-known","macros"] }
