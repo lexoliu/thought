@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use futures::future::try_join_all;
@@ -36,7 +37,10 @@ struct OutputArticleMetadata {
 
 impl Engine {
     pub async fn new(workspace: Workspace) -> anyhow::Result<Self> {
-        todo!()
+        let plugins = PluginManager::from_workspace(workspace.clone())
+            .await
+            .map_err(|err| anyhow!(err))?;
+        Ok(Self(Arc::new(EngineInner { workspace, plugins })))
     }
 
     #[allow(clippy::missing_panics_doc)]
@@ -52,6 +56,10 @@ impl Engine {
                 map.insert(article.path, article.sha256);
             }
         }
+
+        self.0
+            .plugins
+            .copy_theme_assets(output.join("assets"))?;
 
         let mut articles_preview = Vec::new();
         let mut changed_articles = Vec::new();

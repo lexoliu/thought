@@ -1,7 +1,12 @@
 //! Metadata structures and utilities
 //! This module provides the data structures and traits for working with article and category metadata.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
@@ -282,6 +287,225 @@ pub enum PluginSource {
     },
     /// Plugin from local filesystem
     Local(PathBuf),
+}
+
+/// Classification of plugin roles.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginKind {
+    Theme,
+    Hook,
+}
+
+/// Errors that can occur while loading a plugin manifest.
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestError {
+    /// Failed to read the manifest file.
+    #[error("failed to read Plugin.toml: {0}")]
+    Io(#[from] std::io::Error),
+    /// Failed to parse the manifest TOML.
+    #[error("failed to parse Plugin.toml: {0}")]
+    Parse(#[from] toml::de::Error),
+    /// A required field is missing.
+    #[error("missing required field `{0}` in Plugin.toml")]
+    MissingField(&'static str),
+}
+
+/// Metadata declared by an individual plugin.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginManifest {
+    pub name: String,
+    pub author: String,
+    pub version: String,
+    #[serde(rename = "type")]
+    pub kind: PluginKind,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl PluginManifest {
+    /// Load a `Plugin.toml` from disk.
+    ///
+    /// # Errors
+    /// Returns [`ManifestError`] for missing files, malformed TOML, or absent required fields.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, ManifestError> {
+        let data = fs::read_to_string(path)?;
+        let manifest: Self = toml::from_str(&data)?;
+        if manifest.name.trim().is_empty() {
+            return Err(ManifestError::MissingField("name"));
+        }
+        if manifest.author.trim().is_empty() {
+            return Err(ManifestError::MissingField("author"));
+        }
+        if manifest.version.trim().is_empty() {
+            return Err(ManifestError::MissingField("version"));
+        }
+        Ok(manifest)
+    }
+}
+
+impl FromStr for PluginKind {
+    type Err = ManifestError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "theme" => Ok(Self::Theme),
+            "hook" => Ok(Self::Hook),
+            _ => Err(ManifestError::MissingField("type")),
+        }
+    }
+}
+
+/// Preferred build workflow for resolving a plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildMode {
+    /// Expect a precompiled `main.wasm`.
+    Precompiled,
+    /// Build the plugin from its Cargo project.
+    Cargo,
+}
+
+impl Default for BuildMode {
+    fn default() -> Self {
+        Self::Precompiled
+    }
+}
+
+/// Errors that can occur while parsing `Water.toml`.
+#[derive(Debug, thiserror::Error)]
+pub enum WaterError {
+    /// `Water.toml` was unreadable.
+    #[error("failed to read Water.toml: {0}")]
+    Io(#[from] std::io::Error),
+    /// `Water.toml` contained invalid TOML.
+    #[error("failed to parse Water.toml: {0}")]
+    Parse(#[from] toml::de::Error),
+    /// A required field is missing from the configuration.
+    #[error("missing field `{0}` in Water.toml")]
+    MissingField(&'static str),
+}
+
+/// Concrete plugin specification resolved from `Water.toml`.
+#[derive(Debug, Clone)]
+pub struct PluginSpec {
+    pub name: String,
+    pub declared_kind: Option<PluginKind>,
+    pub mode: BuildMode,
+    pub locator: PluginLocator,
+}
+
+/// Where a plugin should be fetched from.
+#[derive(Debug, Clone)]
+pub enum PluginLocator {
+    CratesIo { version: String },
+    Git { repo: String, rev: Option<String>, is_github: bool },
+    Local(PathBuf),
+}
+
+/// Workspace-level plugin configuration (`Water.toml`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WaterToml {
+    #[serde(default)]
+    plugins: BTreeMap<String, PluginEntryRaw>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PluginEntryRaw {
+    Simple(String),
+    Detailed(PluginEntry),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PluginEntry {
+    #[serde(rename = "type")]
+    declared_kind: Option<PluginKind>,
+    #[serde(default)]
+    mode: Option<BuildMode>,
+    version: Option<String>,
+    github: Option<String>,
+    repo: Option<String>,
+    rev: Option<String>,
+    path: Option<PathBuf>,
+}
+
+impl WaterToml {
+    /// Load the `Water.toml` file from disk.
+    ///
+    /// # Errors
+    /// Returns [`WaterError`] if the file cannot be read or parsed.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, WaterError> {
+        let data = fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&data)?;
+        Ok(config)
+    }
+
+    /// Resolve plugin specifications declared in the configuration.
+    ///
+    /// # Errors
+    /// Returns [`WaterError`] if any entry is invalid or missing required fields.
+    pub fn plugins(&self) -> Result<Vec<PluginSpec>, WaterError> {
+        self.plugins
+            .iter()
+            .map(|(name, entry)| match entry {
+                PluginEntryRaw::Simple(version) => {
+                    PluginSpec::from_version(name.clone(), version.clone())
+                }
+                PluginEntryRaw::Detailed(entry) => {
+                    PluginSpec::try_from_entry(name.clone(), entry.clone())
+                }
+            })
+            .collect()
+    }
+}
+
+impl PluginSpec {
+    fn from_version(name: String, version: String) -> Result<Self, WaterError> {
+        if version.trim().is_empty() {
+            return Err(WaterError::MissingField("plugins.version"));
+        }
+        Ok(Self {
+            name,
+            declared_kind: None,
+            mode: BuildMode::Precompiled,
+            locator: PluginLocator::CratesIo { version },
+        })
+    }
+
+    fn try_from_entry(name: String, entry: PluginEntry) -> Result<Self, WaterError> {
+        let locator = if let Some(version) = entry.version {
+            if version.trim().is_empty() {
+                return Err(WaterError::MissingField("plugins.version"));
+            }
+            PluginLocator::CratesIo { version }
+        } else if let Some(path) = entry.path {
+            PluginLocator::Local(path)
+        } else if let Some(github) = entry.github {
+            PluginLocator::Git {
+                repo: github,
+                rev: entry.rev,
+                is_github: true,
+            }
+        } else if let Some(repo) = entry.repo {
+            PluginLocator::Git {
+                repo,
+                rev: entry.rev,
+                is_github: false,
+            }
+        } else {
+            return Err(WaterError::MissingField(
+                "plugins.version | plugins.github | plugins.repo | plugins.path",
+            ));
+        };
+
+        Ok(PluginSpec {
+            name,
+            declared_kind: entry.declared_kind,
+            mode: entry.mode.unwrap_or_default(),
+            locator,
+        })
+    }
 }
 
 /// Errors that can occur when opening metadata files
