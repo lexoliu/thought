@@ -1,9 +1,9 @@
 use crate::types::metadata::{
-    BuildMode, PluginKind, PluginLocator, PluginManifest, PluginSpec, WaterToml,
+    BuildMode, PluginKind, PluginLocator, PluginManifest, PluginSpec, PluginToml,
 };
 use anyhow::{Result, anyhow};
 use git2::Repository;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use std::{
     env::temp_dir,
@@ -62,8 +62,8 @@ struct HookRuntimeEntry {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginLoadError {
-    #[error("Water.toml not found at {0}")]
-    MissingWaterConfig(PathBuf),
+    #[error("Plugin.toml not found at {0}")]
+    MissingPluginManifest(PathBuf),
     #[error("{0}")]
     Water(#[from] crate::types::metadata::WaterError),
     #[error("{0}")]
@@ -84,7 +84,7 @@ pub enum PluginLoadError {
     },
     #[error("multiple themes detected; already loaded `{0}`")]
     ThemeAlreadyLoaded(String),
-    #[error("no theme plugin resolved from Water.toml")]
+    #[error("no theme plugin resolved from Plugin.toml")]
     ThemeMissing,
     #[error("failed to initialize plugin runtime: {0}")]
     Runtime(anyhow::Error),
@@ -170,12 +170,12 @@ struct ResolvedPlugin {
 impl PluginLoader {
     async fn load(workspace: Workspace) -> Result<PluginManager, PluginLoadError> {
         let workspace_root = workspace.path().to_path_buf();
-        let water_path = workspace_root.join("Water.toml");
-        if !water_path.exists() {
-            return Err(PluginLoadError::MissingWaterConfig(water_path));
+        let plugin_path = workspace_root.join("Plugin.toml");
+        if !plugin_path.exists() {
+            return Err(PluginLoadError::MissingPluginManifest(plugin_path));
         }
-        let water = WaterToml::load(&water_path)?;
-        let specs = water.plugins()?;
+        let plugin = PluginToml::load(&plugin_path)?;
+        let specs = plugin.plugins()?;
 
         let cache_root = workspace_root.join(".cache");
         fs::create_dir_all(&cache_root)?;
@@ -265,7 +265,7 @@ impl PluginLoader {
         &mut self,
         spec: PluginSpec,
     ) -> Result<ResolvedPlugin, PluginLoadError> {
-        let root = self.prepare_source_dir(&spec)?;
+        let root = self.prepare_source_dir(&spec).await?;
         let manifest = PluginManifest::load(root.join("Plugin.toml"))?;
         let assets_path = self.ensure_assets_dir(&root)?;
         let wasm_path = root.join("main.wasm");
@@ -296,7 +296,7 @@ impl PluginLoader {
         })
     }
 
-    fn prepare_source_dir(&self, spec: &PluginSpec) -> Result<PathBuf, PluginLoadError> {
+    async fn prepare_source_dir(&self, spec: &PluginSpec) -> Result<PathBuf, PluginLoadError> {
         match &spec.locator {
             PluginLocator::Local(path) => {
                 let path = if path.is_relative() {
@@ -314,7 +314,8 @@ impl PluginLoader {
             }
             PluginLocator::CratesIo { version } => {
                 let dest = self.sources_root.join(format!("{}-{}", spec.name, version));
-                self.fetch_from_crates_io(&spec.name, version, &dest)?;
+                self.fetch_from_crates_io(&spec.name, version, &dest)
+                    .await?;
                 Ok(dest)
             }
             PluginLocator::Git {
@@ -323,7 +324,8 @@ impl PluginLoader {
                 is_github,
             } => {
                 let dest = self.sources_root.join(&spec.name);
-                self.fetch_from_git(repo, rev.as_deref(), *is_github, &dest, spec.mode)?;
+                self.fetch_from_git(repo, rev.as_deref(), *is_github, &dest, spec.mode)
+                    .await?;
                 Ok(dest)
             }
         }
@@ -391,7 +393,7 @@ impl PluginLoader {
         Ok(())
     }
 
-    fn fetch_from_crates_io(
+    async fn fetch_from_crates_io(
         &self,
         name: &str,
         version: &str,
@@ -400,18 +402,19 @@ impl PluginLoader {
         if dest.exists() {
             fs::remove_dir_all(dest)?;
         }
-        let repo = self.repo_from_crates(name, version)?;
+        let repo = self.repo_from_crates(name, version).await?;
         self.fetch_from_git(
             &repo,
             Some(version),
             repo.contains("github.com"),
             dest,
             BuildMode::Precompiled,
-        )?;
+        )
+        .await?;
         Ok(())
     }
 
-    fn repo_from_crates(&self, name: &str, version: &str) -> Result<String, PluginLoadError> {
+    async fn repo_from_crates(&self, name: &str, version: &str) -> Result<String, PluginLoadError> {
         #[derive(Deserialize)]
         struct CrateResponse {
             #[serde(rename = "crate")]
@@ -424,14 +427,14 @@ impl PluginLoader {
         }
 
         let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
-        let response = self.http.get(url).send()?;
+        let response = self.http.get(url).send().await?;
         if !response.status().is_success() {
             return Err(PluginLoadError::UnsupportedSpec(format!(
                 "failed to fetch crate `{name}` metadata (status {})",
                 response.status(),
             )));
         }
-        let metadata: CrateResponse = response.json()?;
+        let metadata: CrateResponse = response.json().await?;
         let repo = metadata.krate.repository.ok_or_else(|| {
             PluginLoadError::UnsupportedSpec(format!(
                 "crate `{name}` does not declare a repository"
@@ -440,7 +443,7 @@ impl PluginLoader {
         Ok(repo)
     }
 
-    fn fetch_from_git(
+    async fn fetch_from_git(
         &self,
         repo: &str,
         rev: Option<&str>,
@@ -455,7 +458,7 @@ impl PluginLoader {
 
         if is_github
             && mode == BuildMode::Precompiled
-            && let Some(result) = self.try_download_github_release(repo, rev, dest)
+            && let Some(result) = self.try_download_github_release(repo, rev, dest).await
         {
             result?;
         }
@@ -482,7 +485,7 @@ impl PluginLoader {
         Ok(())
     }
 
-    fn try_download_github_release(
+    async fn try_download_github_release(
         &self,
         repo_url: &str,
         rev: Option<&str>,
@@ -501,7 +504,7 @@ impl PluginLoader {
             format!("https://api.github.com/repos/{owner}/{repo}/releases/latest")
         };
 
-        match self.download_release_asset(&release_api, dest) {
+        match self.download_release_asset(&release_api, dest).await {
             Ok(path) => Some(Ok(path)),
             Err(PluginLoadError::UnsupportedSpec(_)) => None,
             Err(PluginLoadError::Network(_)) => None,
@@ -509,7 +512,7 @@ impl PluginLoader {
         }
     }
 
-    fn download_release_asset(
+    async fn download_release_asset(
         &self,
         api_url: &str,
         dest: &Path,
@@ -525,14 +528,14 @@ impl PluginLoader {
             assets: Vec<ReleaseAsset>,
         }
 
-        let response = self.http.get(api_url).send()?;
+        let response = self.http.get(api_url).send().await?;
         if !response.status().is_success() {
             return Err(PluginLoadError::UnsupportedSpec(format!(
                 "no GitHub release available at {api_url} (status {})",
                 response.status()
             )));
         }
-        let release: ReleaseResponse = response.json()?;
+        let release: ReleaseResponse = response.json().await?;
         let asset = release
             .assets
             .into_iter()
@@ -542,7 +545,13 @@ impl PluginLoader {
                     "release response at {api_url} does not contain a `.wasm` asset"
                 ))
             })?;
-        let bytes = self.http.get(asset.browser_download_url).send()?.bytes()?;
+        let bytes = self
+            .http
+            .get(asset.browser_download_url)
+            .send()
+            .await?
+            .bytes()
+            .await?;
         let wasm_path = dest.join("main.wasm");
         if let Some(parent) = wasm_path.parent() {
             fs::create_dir_all(parent)?;

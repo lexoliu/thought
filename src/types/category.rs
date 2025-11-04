@@ -27,46 +27,41 @@ impl Category {
     }
 }
 
-mod io {
-    use std::{path::Path, string::String, vec::Vec};
+use std::{path::Path, string::String, vec::Vec};
 
-    use thiserror::Error;
+use thiserror::Error;
 
-    use crate::types::{
-        category::Category,
-        metadata::{CategoryMetadata, FailToOpenMetadata, MetadataExt},
-    };
+use crate::types::metadata::{FailToOpenMetadata, MetadataExt};
 
-    #[derive(Debug, Error)]
-    pub enum FailToOpenCategory {
-        #[error("Workspace not found")]
-        WorkspaceNotFound,
+#[derive(Debug, Error)]
+pub enum FailToOpenCategory {
+    #[error("Workspace not found")]
+    WorkspaceNotFound,
 
-        #[error("Failed to open category metadata: {0}")]
-        FailToOpenMetadata(#[from] FailToOpenMetadata),
-    }
+    #[error("Failed to open category metadata: {0}")]
+    FailToOpenMetadata(#[from] FailToOpenMetadata),
+}
 
-    impl Category {
-        /// Open a category from the given root path and category path
-        ///
-        /// # Errors
-        /// Returns `FailToOpenCategory::WorkspaceNotFound` if the category does not exist
-        /// Returns `FailToOpenCategory::FailToOpenMetadata` if the metadata file cannot be opened
-        pub async fn open(
-            root: impl AsRef<Path>,
-            path: Vec<String>,
-        ) -> Result<Self, FailToOpenCategory> {
-            let path_buf = root.as_ref().join("articles");
-            let full_path = path.iter().fold(path_buf, |acc, comp| acc.join(comp));
-            let metadata_path = full_path.join("Category.toml");
+impl Category {
+    /// Open a category from the given root path and category path
+    ///
+    /// # Errors
+    /// Returns `FailToOpenCategory::WorkspaceNotFound` if the category does not exist
+    /// Returns `FailToOpenCategory::FailToOpenMetadata` if the metadata file cannot be opened
+    pub async fn open(
+        root: impl AsRef<Path>,
+        path: Vec<String>,
+    ) -> Result<Self, FailToOpenCategory> {
+        let path_buf = root.as_ref().join("articles");
+        let full_path = path.iter().fold(path_buf, |acc, comp| acc.join(comp));
+        let metadata_path = full_path.join("Category.toml");
 
-            // check if the category directory exists
-            if !full_path.exists() || !full_path.is_dir() {
-                return Err(FailToOpenCategory::WorkspaceNotFound);
-            }
-
-            let metadata = CategoryMetadata::open(metadata_path).await?;
-            Ok(Self { path, metadata })
+        // check if the category directory exists
+        if !full_path.exists() || !full_path.is_dir() {
+            return Err(FailToOpenCategory::WorkspaceNotFound);
         }
+
+        let metadata = CategoryMetadata::open(metadata_path).await?;
+        Ok(Self { path, metadata })
     }
 }

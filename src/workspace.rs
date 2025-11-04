@@ -2,7 +2,7 @@ use crate::{
     engine::Engine,
     types::{
         article::Article,
-        category::Category,
+        category::{Category, FailToOpenCategory},
         metadata::{
             ArticleMetadata, CategoryMetadata, FailToOpenMetadata, MetadataExt, ThemeSource,
             WorkspaceMetadata,
@@ -15,7 +15,9 @@ use std::{
     fs as std_fs, io,
     path::{Path, PathBuf},
 };
+use thiserror::Error;
 use time::OffsetDateTime;
+use tokio::fs::create_dir;
 use tokio_stream::Stream;
 use tracing::warn;
 
@@ -43,8 +45,14 @@ pub struct Workspace {
     metadata: WorkspaceMetadata,
 }
 
-pub enum FailToCreateCategory {
-    Io(std::io::Error),
+#[derive(Debug, Error)]
+pub enum FailToCreateArticle {
+    #[error("Invalid article path, must include at least a slug")]
+    InvalidPath,
+    #[error("Fail to open category: {0}")]
+    Category(#[from] FailToOpenCategory),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl Workspace {
@@ -62,20 +70,29 @@ impl Workspace {
         &self.path
     }
 
-    pub async fn create(
-        root: impl AsRef<std::path::Path>,
-        title: String,
-        description: String,
-    ) -> Result<Self, std::io::Error> {
-        let metadata_path = root.as_ref().join("Thought.toml");
+    pub async fn create(root: impl AsRef<Path>, name: String) -> color_eyre::eyre::Result<Self> {
+        // create workspace directory
+
+        let root = root.as_ref().join(&name);
+        create_dir(&root).await?;
         let owner = detect_local_user();
         let theme = default_theme();
-        let metadata = WorkspaceMetadata::new(title, description, owner, theme);
-        metadata.save_to_file(&metadata_path).await?;
-        Ok(Self {
-            path: root.as_ref().to_path_buf(),
+        // create workspace metadata
+        let metadata = WorkspaceMetadata::new(name, "Thoughtful blog", owner, theme);
+        metadata.save_to_file(root.join("Thought.toml")).await?;
+
+        // create articles directory
+
+        create_dir(root.join("articles")).await?;
+
+        let workspace = Self {
+            path: root.to_path_buf(),
             metadata,
-        })
+        };
+
+        let article = workspace.create_article(["hello"]).await?;
+
+        Ok(workspace)
     }
 
     pub fn set_owner(&mut self, owner: String) {
@@ -107,14 +124,14 @@ impl Workspace {
 
     pub async fn create_article(
         &self,
-        path: impl Into<Vec<String>>,
-    ) -> Result<Article, FailToCreateCategory> {
-        let mut segments = path.into();
+        path: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Article, FailToCreateArticle> {
+        let mut segments = path
+            .into_iter()
+            .map(|s| s.as_ref().to_string())
+            .collect::<Vec<String>>();
         if segments.is_empty() {
-            return Err(FailToCreateCategory::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "article path must include at least a slug",
-            )));
+            return Err(FailToCreateArticle::InvalidPath);
         }
 
         let slug = segments
@@ -122,18 +139,14 @@ impl Workspace {
             .expect("article path guaranteed to contain a slug");
         let category_path = segments;
 
-        self.ensure_category_chain(&category_path, None)
-            .await
-            .map_err(FailToCreateCategory::Io)?;
+        self.ensure_category_chain(&category_path, None).await?;
 
         let mut article_dir = self.path.join("articles");
         for segment in &category_path {
             article_dir.push(segment);
         }
         article_dir.push(&slug);
-        tokio::fs::create_dir_all(&article_dir)
-            .await
-            .map_err(FailToCreateCategory::Io)?;
+        tokio::fs::create_dir_all(&article_dir).await?;
 
         let metadata_path = article_dir.join("Article.toml");
         let content_path = article_dir.join("article.md");
@@ -142,19 +155,12 @@ impl Workspace {
         let mut metadata = ArticleMetadata::new(self.metadata.owner().to_owned());
         let summary = format!("Draft article for {title}");
         metadata.set_description(summary.clone());
-        metadata
-            .save_to_file(&metadata_path)
-            .await
-            .map_err(FailToCreateCategory::Io)?;
+        metadata.save_to_file(&metadata_path).await?;
 
         let content = format!("# {title}\n\nWrite your article here.\n");
-        write(&content_path, content.as_bytes())
-            .await
-            .map_err(FailToCreateCategory::Io)?;
+        write(&content_path, content.as_bytes()).await?;
 
-        let category = Category::open(&self.path, category_path.clone())
-            .await
-            .map_err(|err| FailToCreateCategory::Io(io::Error::other(err.to_string())))?;
+        let category = Category::open(&self.path, category_path.clone()).await?;
 
         Ok(Article::new(
             title, slug, category, metadata, summary, content,
@@ -226,7 +232,7 @@ impl Workspace {
         if !tokio::fs::try_exists(&root_metadata_path).await? {
             let metadata = CategoryMetadata::from_raw(
                 OffsetDateTime::now_utc(),
-                self.metadata.title().to_owned(),
+                self.metadata.name().to_owned(),
                 self.metadata.description().to_owned(),
             );
             metadata.save_to_file(&root_metadata_path).await?;

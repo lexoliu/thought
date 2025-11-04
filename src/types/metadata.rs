@@ -161,7 +161,7 @@ impl CategoryMetadata {
 /// Locate in `Thought.toml` at the root of the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMetadata {
-    title: String,
+    name: String,
     description: String,
     owner: String,
     theme: ThemeSource,
@@ -171,13 +171,13 @@ pub struct WorkspaceMetadata {
 impl WorkspaceMetadata {
     /// Create a new workspace metadata with the given parameters
     pub fn new(
-        title: impl Into<String>,
+        name: impl Into<String>,
         description: impl Into<String>,
         owner: impl Into<String>,
         theme: ThemeSource,
     ) -> Self {
         Self {
-            title: title.into(),
+            name: name.into(),
             description: description.into(),
             owner: owner.into(),
             theme,
@@ -190,10 +190,10 @@ impl WorkspaceMetadata {
         self.owner = owner.into();
     }
 
-    /// Get the title of the workspace
+    /// Get the name of the workspace
     #[must_use]
-    pub const fn title(&self) -> &str {
-        self.title.as_str()
+    pub const fn name(&self) -> &str {
+        self.name.as_str()
     }
 
     /// Get the description of the workspace
@@ -368,21 +368,21 @@ impl Default for BuildMode {
     }
 }
 
-/// Errors that can occur while parsing `Water.toml`.
+/// Errors that can occur while parsing `Thought.toml`.
 #[derive(Debug, thiserror::Error)]
 pub enum WaterError {
-    /// `Water.toml` was unreadable.
-    #[error("failed to read Water.toml: {0}")]
+    /// `Thought.toml` was unreadable.
+    #[error("failed to read Thought.toml: {0}")]
     Io(#[from] std::io::Error),
-    /// `Water.toml` contained invalid TOML.
-    #[error("failed to parse Water.toml: {0}")]
+    /// `Thought.toml` contained invalid TOML.
+    #[error("failed to parse Thought.toml: {0}")]
     Parse(#[from] toml::de::Error),
     /// A required field is missing from the configuration.
-    #[error("missing field `{0}` in Water.toml")]
+    #[error("missing field `{0}` in Thought.toml")]
     MissingField(&'static str),
 }
 
-/// Concrete plugin specification resolved from `Water.toml`.
+/// Concrete plugin specification resolved from `Thought.toml`.
 #[derive(Debug, Clone)]
 pub struct PluginSpec {
     pub name: String,
@@ -405,9 +405,9 @@ pub enum PluginLocator {
     Local(PathBuf),
 }
 
-/// Workspace-level plugin configuration (`Water.toml`).
+/// Workspace-level plugin configuration (`Plugin.toml`).
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct WaterToml {
+pub struct PluginToml {
     #[serde(default)]
     plugins: BTreeMap<String, PluginEntryRaw>,
 }
@@ -432,8 +432,8 @@ struct PluginEntry {
     path: Option<PathBuf>,
 }
 
-impl WaterToml {
-    /// Load the `Water.toml` file from disk.
+impl PluginToml {
+    /// Load the `Plugin.toml` file from disk.
     ///
     /// # Errors
     /// Returns [`WaterError`] if the file cannot be read or parsed.

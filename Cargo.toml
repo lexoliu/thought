@@ -13,7 +13,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 url.workspace = true
 whoami = { workspace = true }
-reqwest = { version = "0.12.24", features = ["blocking", "json"] }
+reqwest = { version = "0.12.24", features = ["json"] }
 git2 = "0.18.3"
 hex = "0.4.3"
 regex = "1.12"
