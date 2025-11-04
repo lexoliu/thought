@@ -13,12 +13,11 @@ The index always undergoes a full rebuild, while we only rebuild changed pages. 
 
 At this step, we collect the data required for the build. We parse markdown and metadata, then load essential parts into memory.
 
-## Step 4: Render by Template and Run Plugins
+## Step 4: Plugin Lifecycle and Theme Rendering
 
-This is where the plugin system takes effect. We provide the following hooks for all plugins:
+Rendering is split into two distinct stages:
 
-`on_pre_render` - processes markdown before it is rendered
+- **Lifecycle plugins** run one-at-a-time in declaration order. Each plugin receives the article produced by the previous stage. `on_pre_render` can mutate the article model (e.g. enrich metadata), while `on_post_render` mutates the generated HTML.
+- **Theme rendering** happens between the two plugin hooks. Themes expose pure functions (`generate_page`, `generate_index`) that return HTML without touching I/O, clocks, or randomness. We instantiate themes fresh for every render so page generation remains deterministic and parallelisable.
 
-`on_post_render` - processes HTML after it is rendered
-
-At this stage, we use the current theme. Themes can register `generate_index()` and `generate_page()` hooks.
+Because plugins can rely on WASI Preview 2 capabilities, they may interact with the filesystem namespaces (`/tmp`, `/cache`, `/build`) or clock APIs. Themes, by contrast, are pure and side-effect free.

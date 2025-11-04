@@ -8,7 +8,8 @@ A blazingly fast static site generator for your blog, written in Rust.
 - **Content Management:** Create new articles and categories with simple commands.
 - **Static Site Generation:** Build your entire site into a `build` directory.
 - **Live Preview:** A built-in server to preview your site locally.
-- **Theming:** Easily customize the look and feel of your blog.
+- **Pure Themes:** Themes are deterministic WebAssembly components that render pages.
+- **Lifecycle Plugins:** WASI Preview 2 plugins run sequential hooks around rendering.
 
 ## Installation
 
@@ -72,6 +73,11 @@ owner = "Your Name"
 template = "zenflow"
 ```
 
-## Theming
+## Themes vs. Plugins
 
-Themes are located in the `template` directory. A theme consists of Tera templates for the index page (`index.html`), article page (`article.html`), and a footer (`footer.md`). Static assets can be placed in an `assets` subdirectory within your theme folder.
+Thought distinguishes between **themes** and **plugins** so you can scale presentation and behaviour independently.
+
+- **Themes** are compiled to WebAssembly components (the `theme-runtime` world). They expose pure functions such as `generate_page` and `generate_index`, receive article data, and must return HTML. A theme cannot perform I/O, read clocks, or mutate shared state; the host instantiates it for every render to guarantee determinism and parallelism. You can find the built-in `zenflow` theme under `themes/zenflow`.
+- **Plugins** target WASI Preview 2 (`lifecycle-runtime`) and execute sequential lifecycle hooks (`on_pre_render`, `on_post_render`). Plugins may perform side effects such as reading cached data, writing to `/build`, or using time and randomness. They are evaluated in declaration order, so the output of one plugin becomes the input of the next.
+
+When building custom behaviour, choose a theme whenever you only need to transform data into HTML, and reach for a plugin when you need stateful coordination or side effects.

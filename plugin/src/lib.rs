@@ -1,22 +1,83 @@
 pub use askama;
 pub use pulldown_cmark;
-wit_bindgen::generate!({
-    path: "../wit",
-    world: "theme-plugin",
-    pub_export_macro: true,
-});
-
-pub use exports::thought::plugin::theme::Guest as Theme;
-
 pub mod types {
-    pub use super::thought::plugin::types::{
-        Article, ArticleMetadata, ArticlePreview, Category, CategoryMetadata, Timestamp,
+    wit_bindgen::generate!({
+       path: "wit/plugin.wit",
+       world: "runtime",
+       generate_unused_types:true,
+
+    });
+}
+
+#[doc(hidden)]
+pub mod theme {
+    wit_bindgen::generate!({
+       path: "wit/plugin.wit",
+       world: "theme-runtime",
+       with: { "thought:plugin/types": super::types::thought::plugin::types },
+       pub_export_macro: true,
+    });
+}
+
+pub mod hook {
+    wit_bindgen::generate!({
+       path: "wit/plugin.wit",
+       world: "hook-runtime",
+       with: { "thought:plugin/types": super::types::thought::plugin::types },
+    generate_unused_types:true,
+       pub_export_macro: true,
+    });
+}
+
+pub use types::thought::plugin::types::*;
+
+pub use hook::export as export_hook;
+
+pub trait Theme {
+    fn generate_page(article: Article) -> String;
+    fn generate_index(articles: Vec<ArticlePreview>) -> String;
+}
+
+impl<T: Theme> theme::exports::thought::plugin::theme::Guest for T {
+    fn generate_page(article: Article) -> String {
+        <Self as Theme>::generate_page(article)
+    }
+
+    fn generate_index(articles: Vec<ArticlePreview>) -> String {
+        <Self as Theme>::generate_index(articles)
+    }
+}
+
+pub trait Hook {
+    fn on_pre_render(article: Article) -> Result<Article, String> {
+        Ok(article)
+    }
+    fn on_post_render(article: Article, html: String) -> Result<String, String> {
+        let _ = article;
+        Ok(html)
+    }
+}
+
+impl<T: Hook> hook::exports::thought::plugin::hook::Guest for T {
+    fn on_post_render(input: Article, html: String) -> String {
+        <Self as Hook>::on_post_render(input, html).expect("Hook on_post_render failed")
+    }
+
+    fn on_pre_render(input: Article) -> Article {
+        <Self as Hook>::on_pre_render(input).expect("Hook on_pre_render failed")
+    }
+}
+
+#[macro_export]
+macro_rules! export_theme {
+    ($ty:ident) => {
+        $crate::theme::export!($ty with_types_in $crate::theme);
     };
 }
 
 use time::{Duration, OffsetDateTime};
 
-impl types::Timestamp {
+impl Timestamp {
     #[must_use]
     pub fn to_offset_datetime(&self) -> OffsetDateTime {
         let base =
@@ -33,7 +94,7 @@ impl types::Timestamp {
     }
 }
 
-impl types::ArticleMetadata {
+impl ArticleMetadata {
     #[must_use]
     pub fn created(&self) -> OffsetDateTime {
         self.created.to_offset_datetime()
@@ -55,7 +116,7 @@ impl types::ArticleMetadata {
     }
 }
 
-impl types::ArticlePreview {
+impl ArticlePreview {
     #[must_use]
     pub fn title(&self) -> &str {
         self.title.as_str()
@@ -72,17 +133,17 @@ impl types::ArticlePreview {
     }
 
     #[must_use]
-    pub fn metadata(&self) -> &types::ArticleMetadata {
+    pub fn metadata(&self) -> &ArticleMetadata {
         &self.metadata
     }
 
     #[must_use]
-    pub fn category(&self) -> &types::Category {
+    pub fn category(&self) -> &Category {
         &self.category
     }
 }
 
-impl types::Article {
+impl Article {
     #[must_use]
     pub fn content(&self) -> &str {
         self.content.as_str()
@@ -99,24 +160,24 @@ impl types::Article {
     }
 
     #[must_use]
-    pub fn metadata(&self) -> &types::ArticleMetadata {
+    pub fn metadata(&self) -> &ArticleMetadata {
         self.preview.metadata()
     }
 
     #[must_use]
-    pub fn preview(&self) -> &types::ArticlePreview {
+    pub fn preview(&self) -> &ArticlePreview {
         &self.preview
     }
 }
 
-impl types::Category {
+impl Category {
     #[must_use]
     pub fn path(&self) -> &[String] {
         &self.path
     }
 
     #[must_use]
-    pub fn metadata(&self) -> &types::CategoryMetadata {
+    pub fn metadata(&self) -> &CategoryMetadata {
         &self.metadata
     }
 
@@ -126,7 +187,7 @@ impl types::Category {
     }
 }
 
-impl types::CategoryMetadata {
+impl CategoryMetadata {
     #[must_use]
     pub fn created(&self) -> OffsetDateTime {
         self.created.to_offset_datetime()
@@ -145,7 +206,7 @@ impl types::CategoryMetadata {
 
 pub mod helpers {
     use crate::pulldown_cmark::{html, Parser};
-    use crate::types::{Article, ArticlePreview};
+    use crate::{Article, ArticlePreview};
     use std::fmt;
     use time::{format_description, format_description::well_known, OffsetDateTime};
 
@@ -236,7 +297,7 @@ pub mod helpers {
     impl std::error::Error for FormatDatetimeError {}
 }
 
-impl From<OffsetDateTime> for types::Timestamp {
+impl From<OffsetDateTime> for Timestamp {
     fn from(datetime: OffsetDateTime) -> Self {
         Self {
             seconds: datetime.unix_timestamp(),

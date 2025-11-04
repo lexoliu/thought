@@ -97,6 +97,21 @@ impl ArticleMetadata {
     pub fn add_tag(&mut self, tag: impl Into<String>) {
         self.tags.push(tag.into());
     }
+
+    /// Construct metadata from raw fields. Intended for internal deserialization paths.
+    pub(crate) fn from_raw(
+        created: OffsetDateTime,
+        tags: Vec<String>,
+        author: String,
+        description: Option<String>,
+    ) -> Self {
+        Self {
+            created,
+            tags,
+            author,
+            description,
+        }
+    }
 }
 
 impl CategoryMetadata {
@@ -125,6 +140,19 @@ impl CategoryMetadata {
     #[must_use]
     pub fn description(&self) -> &str {
         self.description.as_str()
+    }
+
+    /// Construct metadata from raw fields. Intended for internal deserialization paths.
+    pub(crate) fn from_raw(
+        created: OffsetDateTime,
+        name: String,
+        description: String,
+    ) -> Self {
+        Self {
+            created,
+            name,
+            description,
+        }
     }
 }
 

@@ -38,13 +38,29 @@ interface types {
     }
 }
 
+world runtime {
+    import types;
+}
+
+interface hook {
+    use types.{article};
+
+    on-pre-render: func(input: article) -> article;
+    on-post-render: func(input: article, html: string) -> string;
+}
+
+world hook-runtime {
+    import types;
+    export hook;
+}
+
 interface theme {
     use types.{article, article-preview};
-
     generate-page: func(article: article) -> string;
     generate-index: func(articles: list<article-preview>) -> string;
 }
 
-world theme-plugin {
+world theme-runtime {
+    include runtime;
     export theme;
 }

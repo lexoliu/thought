@@ -1,38 +1,62 @@
 use anyhow::Result;
 use std::{env::temp_dir, path::Path, sync::Arc};
+use tokio::sync::Mutex;
 use wasmtime::{
-    Store,
-    component::{Component, Instance, Linker},
+    Config, Engine, Store,
+    component::{Component, Linker},
 };
 
 use wasmtime_wasi::{DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxView, WasiView};
 
-use crate::types::{
-    article::{Article, ArticlePreview},
-    category::Category,
-    metadata::{ArticleMetadata, CategoryMetadata},
-};
+use crate::types::article::{Article, ArticlePreview};
 use crate::workspace::Workspace;
-use time::OffsetDateTime;
+
+use bindings::{
+    plugin::LifecycleRuntime as PluginComponent, theme::ThemeRuntime as ThemeComponent,
+};
 
 mod bindings {
-    wasmtime::component::bindgen!({
-        path: "wit",
-        world: "theme-plugin",
-    });
+    pub mod plugin {
+        wasmtime::component::bindgen!({
+            path: "plugin/wit/plugin.wit",
+            world: "hook-runtime",
+        });
+
+        pub type LifecycleRuntime = HookRuntime;
+    }
+
+    pub mod theme {
+        wasmtime::component::bindgen!({
+            path: "plugin/wit/plugin.wit",
+            world: "theme-runtime",
+        });
+    }
 }
 
-use bindings::ThemePlugin;
-
-/// Manages Wasm plugins, including loading and running them.
+/// Orchestrates deterministic theme rendering with sequential lifecycle plugins.
 pub struct PluginManager {
     workspace: Workspace,
     theme: Arc<ThemeRuntime>,
+    plugins: Vec<Arc<Mutex<PluginRuntime>>>,
 }
 
 impl PluginManager {
-    pub fn new(workspace: Workspace) -> Self {
-        todo!()
+    pub fn new(workspace: Workspace, theme: ThemeRuntime, plugins: Vec<PluginRuntime>) -> Self {
+        Self {
+            workspace,
+            theme: Arc::new(theme),
+            plugins: plugins
+                .into_iter()
+                .map(|p| Arc::new(Mutex::new(p)))
+                .collect(),
+        }
+    }
+
+    pub fn from_workspace(workspace: Workspace) -> Result<Self> {
+        let name = workspace.metadata().theme().name().to_owned();
+        let message =
+            format!("loading theme `{name}` directly from workspace is not implemented yet");
+        Err(anyhow::Error::msg(message))
     }
 
     pub fn workspace(&self) -> &Workspace {
@@ -42,113 +66,301 @@ impl PluginManager {
     pub fn theme_runtime(&self) -> Arc<ThemeRuntime> {
         self.theme.clone()
     }
+
+    pub fn plugins(&self) -> impl Iterator<Item = Arc<Mutex<PluginRuntime>>> + '_ {
+        self.plugins.iter().cloned()
+    }
+
+    /// Apply the `on_pre_render` lifecycle hook of each plugin in declaration order.
+    pub async fn apply_pre_render(&self, article: Article) -> Result<Article> {
+        let mut current = article;
+        for runtime in &self.plugins {
+            let mut plugin = runtime.lock().await;
+            current = plugin.on_pre_render(&current)?;
+        }
+        Ok(current)
+    }
+
+    /// Apply the `on_post_render` hook sequentially, letting each plugin transform the HTML.
+    pub async fn apply_post_render(&self, article: &Article, html: String) -> Result<String> {
+        let mut current = html;
+        for runtime in &self.plugins {
+            let mut plugin = runtime.lock().await;
+            current = plugin.on_post_render(article, &current)?;
+        }
+        Ok(current)
+    }
 }
 
 /// Represents a runtime instance of a theme plugin.
 ///
 /// Theme is a pure function, taking article data as input and producing HTML as output.
 ///
-/// Theme runtime has no access to filesystem,time,random,or network.
-struct ThemeRuntime {
+/// Theme runtime has no access to filesystem, time, randomness, or network interfaces.
+/// The host instantiates the component per render to keep evaluation pure and parallel-safe.
+#[derive(Clone)]
+pub struct ThemeRuntime {
     name: String,
-    bindings: ThemePlugin,
-    store: Store<()>,
+    engine: Engine,
+    component: Component,
 }
 
 impl ThemeRuntime {
-    pub fn new(name: String, binary: &[u8]) -> Result<Self> {
-        let mut config = wasmtime::Config::new();
+    pub fn new(name: impl Into<String>, binary: &[u8]) -> Result<Self> {
+        let mut config = Config::new();
         config.async_support(false);
-        let engine = wasmtime::Engine::new(&config)?;
+        let engine = Engine::new(&config)?;
         let component = Component::new(&engine, binary)?;
-        let mut store = Store::new(&engine, ());
-        let linker = Linker::new(&engine);
-        let bindings = ThemePlugin::instantiate(&mut store, &component, &linker)?;
         Ok(Self {
-            name,
-            bindings,
-            store,
+            name: name.into(),
+            engine,
+            component,
         })
     }
 
-    pub fn generate_page(&mut self, article: &Article) -> Result<String> {
-        let input = convert::article(article);
-        let result = self
-            .bindings
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn instantiate(&self) -> Result<(Store<()>, ThemeComponent)> {
+        let mut store = Store::new(&self.engine, ());
+        let linker = Linker::new(&self.engine);
+        let bindings = ThemeComponent::instantiate(&mut store, &self.component, &linker)?;
+        Ok((store, bindings))
+    }
+
+    pub fn generate_page(&self, article: &Article) -> Result<String> {
+        let input = convert::theme::article(article);
+        let (mut store, bindings) = self.instantiate()?;
+        let result = bindings
             .thought_plugin_theme()
-            .call_generate_page(&mut self.store, &input)?;
+            .call_generate_page(&mut store, &input)?;
         Ok(result)
     }
 
-    pub fn generate_index(&mut self, articles: &[ArticlePreview]) -> Result<String> {
-        let input: Vec<_> = articles.iter().map(convert::article_preview).collect();
-        let result = self
-            .bindings
+    pub fn generate_index(&self, articles: &[ArticlePreview]) -> Result<String> {
+        let input: Vec<_> = articles
+            .iter()
+            .map(convert::theme::article_preview)
+            .collect();
+        let (mut store, bindings) = self.instantiate()?;
+        let result = bindings
             .thought_plugin_theme()
-            .call_generate_index(&mut self.store, &input)?;
+            .call_generate_index(&mut store, &input)?;
         Ok(result)
     }
 }
 
 mod convert {
-    use super::{
-        Article, ArticleMetadata, ArticlePreview, Category, CategoryMetadata, OffsetDateTime,
-        bindings,
+    use super::bindings;
+    use crate::types::{
+        article::{Article, ArticlePreview},
+        category::Category,
+        metadata::{ArticleMetadata, CategoryMetadata},
     };
     use std::borrow::ToOwned;
+    use time::{Duration, OffsetDateTime};
 
-    type WitTimestamp = bindings::thought::plugin::types::Timestamp;
-    type WitCategoryMetadata = bindings::thought::plugin::types::CategoryMetadata;
-    type WitCategory = bindings::thought::plugin::types::Category;
-    type WitArticleMetadata = bindings::thought::plugin::types::ArticleMetadata;
-    type WitArticlePreview = bindings::thought::plugin::types::ArticlePreview;
-    type WitArticle = bindings::thought::plugin::types::Article;
+    fn to_timestamp_parts(value: OffsetDateTime) -> (i64, u32) {
+        (value.unix_timestamp(), value.nanosecond())
+    }
 
-    pub fn article(article: &Article) -> WitArticle {
-        WitArticle {
-            preview: article_preview(article.preview()),
-            content: article.content().to_owned(),
+    fn from_timestamp_parts((seconds, nanos): (i64, u32)) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(seconds).unwrap_or(OffsetDateTime::UNIX_EPOCH)
+            + Duration::nanoseconds(i64::from(nanos))
+    }
+
+    trait IntoThemeTimestamp {
+        fn into_theme_timestamp(self) -> bindings::theme::thought::plugin::types::Timestamp;
+    }
+
+    trait IntoPluginTimestamp {
+        fn into_plugin_timestamp(self) -> bindings::plugin::thought::plugin::types::Timestamp;
+    }
+
+    impl IntoThemeTimestamp for OffsetDateTime {
+        fn into_theme_timestamp(self) -> bindings::theme::thought::plugin::types::Timestamp {
+            let (seconds, nanos) = to_timestamp_parts(self);
+            bindings::theme::thought::plugin::types::Timestamp { seconds, nanos }
         }
     }
 
-    pub fn article_preview(preview: &ArticlePreview) -> WitArticlePreview {
-        WitArticlePreview {
-            title: preview.title().to_owned(),
-            slug: preview.slug().to_owned(),
-            category: category(preview.category()),
-            metadata: article_metadata(preview.metadata()),
-            description: preview.description().to_owned(),
+    impl IntoPluginTimestamp for OffsetDateTime {
+        fn into_plugin_timestamp(self) -> bindings::plugin::thought::plugin::types::Timestamp {
+            let (seconds, nanos) = to_timestamp_parts(self);
+            bindings::plugin::thought::plugin::types::Timestamp { seconds, nanos }
         }
     }
 
-    fn category(category: &Category) -> WitCategory {
-        WitCategory {
-            path: category.path().clone(),
-            metadata: category_metadata(category.metadata()),
+    impl From<bindings::plugin::thought::plugin::types::Timestamp> for OffsetDateTime {
+        fn from(value: bindings::plugin::thought::plugin::types::Timestamp) -> Self {
+            from_timestamp_parts((value.seconds, value.nanos))
         }
     }
 
-    fn category_metadata(metadata: &CategoryMetadata) -> WitCategoryMetadata {
-        WitCategoryMetadata {
-            created: timestamp(metadata.created()),
-            name: metadata.name().to_owned(),
-            description: metadata.description().to_owned(),
+    impl From<&CategoryMetadata> for bindings::theme::thought::plugin::types::CategoryMetadata {
+        fn from(value: &CategoryMetadata) -> Self {
+            Self {
+                created: value.created().into_theme_timestamp(),
+                name: value.name().to_owned(),
+                description: value.description().to_owned(),
+            }
         }
     }
 
-    fn article_metadata(metadata: &ArticleMetadata) -> WitArticleMetadata {
-        WitArticleMetadata {
-            created: timestamp(metadata.created()),
-            tags: metadata.tags().to_vec(),
-            author: metadata.author().to_owned(),
-            description: metadata.description().map(ToOwned::to_owned),
+    impl From<&CategoryMetadata> for bindings::plugin::thought::plugin::types::CategoryMetadata {
+        fn from(value: &CategoryMetadata) -> Self {
+            Self {
+                created: value.created().into_plugin_timestamp(),
+                name: value.name().to_owned(),
+                description: value.description().to_owned(),
+            }
         }
     }
 
-    fn timestamp(value: OffsetDateTime) -> WitTimestamp {
-        WitTimestamp {
-            seconds: value.unix_timestamp(),
-            nanos: value.nanosecond(),
+    impl From<bindings::plugin::thought::plugin::types::CategoryMetadata> for CategoryMetadata {
+        fn from(value: bindings::plugin::thought::plugin::types::CategoryMetadata) -> Self {
+            CategoryMetadata::from_raw(value.created.into(), value.name, value.description)
+        }
+    }
+
+    impl From<&Category> for bindings::theme::thought::plugin::types::Category {
+        fn from(value: &Category) -> Self {
+            Self {
+                path: value.path().clone(),
+                metadata: value.metadata().into(),
+            }
+        }
+    }
+
+    impl From<&Category> for bindings::plugin::thought::plugin::types::Category {
+        fn from(value: &Category) -> Self {
+            Self {
+                path: value.path().clone(),
+                metadata: value.metadata().into(),
+            }
+        }
+    }
+
+    impl From<bindings::plugin::thought::plugin::types::Category> for Category {
+        fn from(value: bindings::plugin::thought::plugin::types::Category) -> Self {
+            Self::new(value.path, value.metadata.into())
+        }
+    }
+
+    impl From<&ArticleMetadata> for bindings::theme::thought::plugin::types::ArticleMetadata {
+        fn from(value: &ArticleMetadata) -> Self {
+            Self {
+                created: value.created().into_theme_timestamp(),
+                tags: value.tags().to_vec(),
+                author: value.author().to_owned(),
+                description: value.description().map(ToOwned::to_owned),
+            }
+        }
+    }
+
+    impl From<&ArticleMetadata> for bindings::plugin::thought::plugin::types::ArticleMetadata {
+        fn from(value: &ArticleMetadata) -> Self {
+            Self {
+                created: value.created().into_plugin_timestamp(),
+                tags: value.tags().to_vec(),
+                author: value.author().to_owned(),
+                description: value.description().map(ToOwned::to_owned),
+            }
+        }
+    }
+
+    impl From<bindings::plugin::thought::plugin::types::ArticleMetadata> for ArticleMetadata {
+        fn from(value: bindings::plugin::thought::plugin::types::ArticleMetadata) -> Self {
+            ArticleMetadata::from_raw(
+                value.created.into(),
+                value.tags,
+                value.author,
+                value.description,
+            )
+        }
+    }
+
+    impl From<&ArticlePreview> for bindings::theme::thought::plugin::types::ArticlePreview {
+        fn from(value: &ArticlePreview) -> Self {
+            Self {
+                title: value.title().to_owned(),
+                slug: value.slug().to_owned(),
+                category: value.category().into(),
+                metadata: value.metadata().into(),
+                description: value.description().to_owned(),
+            }
+        }
+    }
+
+    impl From<&ArticlePreview> for bindings::plugin::thought::plugin::types::ArticlePreview {
+        fn from(value: &ArticlePreview) -> Self {
+            Self {
+                title: value.title().to_owned(),
+                slug: value.slug().to_owned(),
+                category: value.category().into(),
+                metadata: value.metadata().into(),
+                description: value.description().to_owned(),
+            }
+        }
+    }
+
+    impl From<&Article> for bindings::theme::thought::plugin::types::Article {
+        fn from(value: &Article) -> Self {
+            Self {
+                preview: value.preview().into(),
+                content: value.content().to_owned(),
+            }
+        }
+    }
+
+    impl From<&Article> for bindings::plugin::thought::plugin::types::Article {
+        fn from(value: &Article) -> Self {
+            Self {
+                preview: value.preview().into(),
+                content: value.content().to_owned(),
+            }
+        }
+    }
+
+    impl From<bindings::plugin::thought::plugin::types::Article> for Article {
+        fn from(value: bindings::plugin::thought::plugin::types::Article) -> Self {
+            let category: Category = value.preview.category.into();
+            let metadata: ArticleMetadata = value.preview.metadata.into();
+            Article::new(
+                value.preview.title,
+                value.preview.slug,
+                category,
+                metadata,
+                value.preview.description,
+                value.content,
+            )
+        }
+    }
+
+    pub mod theme {
+        use super::*;
+
+        pub fn article(article: &Article) -> bindings::theme::thought::plugin::types::Article {
+            article.into()
+        }
+
+        pub fn article_preview(
+            preview: &ArticlePreview,
+        ) -> bindings::theme::thought::plugin::types::ArticlePreview {
+            preview.into()
+        }
+    }
+
+    pub mod plugin {
+        use super::*;
+
+        pub fn article(article: &Article) -> bindings::plugin::thought::plugin::types::Article {
+            article.into()
+        }
+
+        pub fn into_article(value: bindings::plugin::thought::plugin::types::Article) -> Article {
+            value.into()
         }
     }
 }
@@ -170,10 +382,12 @@ mod convert {
 ///
 /// ## Network
 /// Network access is not supported by now. It is planned to be added in the future.
+///
+/// Plugin runtimes are executed sequentially; the output of one lifecycle hook becomes the input of the next.
 pub struct PluginRuntime {
     name: String,
     store: Store<PluginRuntimeState>,
-    _instance: Instance,
+    bindings: PluginComponent,
 }
 
 struct PluginRuntimeState {
@@ -229,9 +443,9 @@ impl PluginRuntime {
         assets_path: &Path,
         build_path: Option<&Path>,
     ) -> Result<Self> {
-        let mut config = wasmtime::Config::new();
+        let mut config = Config::new();
         config.async_support(true);
-        let engine = wasmtime::Engine::new(&config)?;
+        let engine = Engine::new(&config)?;
 
         let state = PluginRuntimeState::new(&name, cache_path, assets_path, build_path)?;
         let component = Component::new(&engine, binary)?;
@@ -239,12 +453,34 @@ impl PluginRuntime {
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
 
         let mut store = Store::new(&engine, state);
-        let instance = linker.instantiate_async(&mut store, &component).await?;
+        let bindings = PluginComponent::instantiate_async(&mut store, &component, &linker).await?;
 
         Ok(Self {
             name,
             store,
-            _instance: instance,
+            bindings,
         })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn on_pre_render(&mut self, article: &Article) -> Result<Article> {
+        let input = convert::plugin::article(article);
+        let result = self
+            .bindings
+            .thought_plugin_hook()
+            .call_on_pre_render(&mut self.store, &input)?;
+        Ok(convert::plugin::into_article(result))
+    }
+
+    pub fn on_post_render(&mut self, article: &Article, html: &str) -> Result<String> {
+        let input = convert::plugin::article(article);
+        let result = self
+            .bindings
+            .thought_plugin_hook()
+            .call_on_post_render(&mut self.store, &input, html)?;
+        Ok(result)
     }
 }

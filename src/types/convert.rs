@@ -1,5 +1,3 @@
-use thought_plugin::types;
-
 use std::borrow::ToOwned;
 
 use crate::types::{
@@ -8,11 +6,11 @@ use crate::types::{
     metadata::{ArticleMetadata, CategoryMetadata},
 };
 
-type WitCategoryMetadata = types::CategoryMetadata;
-type WitCategory = types::Category;
-type WitArticleMetadata = types::ArticleMetadata;
-type WitArticlePreview = types::ArticlePreview;
-type WitArticle = types::Article;
+type WitCategoryMetadata = thought_plugin::CategoryMetadata;
+type WitCategory = thought_plugin::Category;
+type WitArticleMetadata = thought_plugin::ArticleMetadata;
+type WitArticlePreview = thought_plugin::ArticlePreview;
+type WitArticle = thought_plugin::Article;
 
 impl From<Article> for WitArticle {
     fn from(value: Article) -> Self {
