@@ -1,14 +1,13 @@
-use anyhow::{anyhow, Result};
 use crate::types::metadata::{
     BuildMode, PluginKind, PluginLocator, PluginManifest, PluginSpec, WaterToml,
 };
+use anyhow::{Result, anyhow};
 use git2::Repository;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{
     env::temp_dir,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
@@ -222,11 +221,9 @@ impl PluginLoader {
                     if let Some((_, manifest, _)) = &theme_slot {
                         return Err(PluginLoadError::ThemeAlreadyLoaded(manifest.name.clone()));
                     }
-                    let runtime = ThemeRuntime::new(
-                        resolved.manifest.name.clone(),
-                        &resolved.binary,
-                    )
-                    .map_err(PluginLoadError::Runtime)?;
+                    let runtime =
+                        ThemeRuntime::new(resolved.manifest.name.clone(), &resolved.binary)
+                            .map_err(PluginLoadError::Runtime)?;
                     let assets = if resolved.assets_path.exists() {
                         Some(resolved.assets_path.clone())
                     } else {
@@ -264,7 +261,10 @@ impl PluginLoader {
         })
     }
 
-    async fn resolve_single(&mut self, spec: PluginSpec) -> Result<ResolvedPlugin, PluginLoadError> {
+    async fn resolve_single(
+        &mut self,
+        spec: PluginSpec,
+    ) -> Result<ResolvedPlugin, PluginLoadError> {
         let root = self.prepare_source_dir(&spec)?;
         let manifest = PluginManifest::load(root.join("Plugin.toml"))?;
         let assets_path = self.ensure_assets_dir(&root)?;
@@ -313,9 +313,7 @@ impl PluginLoader {
                 Ok(path)
             }
             PluginLocator::CratesIo { version } => {
-                let dest = self
-                    .sources_root
-                    .join(format!("{}-{}", spec.name, version));
+                let dest = self.sources_root.join(format!("{}-{}", spec.name, version));
                 self.fetch_from_crates_io(&spec.name, version, &dest)?;
                 Ok(dest)
             }
@@ -370,7 +368,10 @@ impl PluginLoader {
             .arg("--target")
             .arg(target)
             .current_dir(root)
-            .env("CARGO_TARGET_DIR", target_dir.parent().unwrap_or(&target_dir))
+            .env(
+                "CARGO_TARGET_DIR",
+                target_dir.parent().unwrap_or(&target_dir),
+            )
             .status()
             .map_err(|err| PluginLoadError::Runtime(err.into()))?;
 
@@ -383,10 +384,7 @@ impl PluginLoader {
 
         let artifact_dir = target_dir.join("release");
         let wasm_file = find_single_wasm(&artifact_dir).ok_or_else(|| {
-            PluginLoadError::MissingBinary(
-                manifest.name.clone(),
-                artifact_dir.join("*.wasm"),
-            )
+            PluginLoadError::MissingBinary(manifest.name.clone(), artifact_dir.join("*.wasm"))
         })?;
         let main_wasm = root.join("main.wasm");
         fs::copy(wasm_file, main_wasm)?;
@@ -434,12 +432,11 @@ impl PluginLoader {
             )));
         }
         let metadata: CrateResponse = response.json()?;
-        let repo = metadata
-            .krate
-            .repository
-            .ok_or_else(|| PluginLoadError::UnsupportedSpec(format!(
+        let repo = metadata.krate.repository.ok_or_else(|| {
+            PluginLoadError::UnsupportedSpec(format!(
                 "crate `{name}` does not declare a repository"
-            )))?;
+            ))
+        })?;
         Ok(repo)
     }
 
@@ -500,9 +497,7 @@ impl PluginLoader {
         let release_api = if let Some(tag) = rev {
             format!("https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}")
         } else {
-            format!(
-                "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-            )
+            format!("https://api.github.com/repos/{owner}/{repo}/releases/latest")
         };
 
         match self.download_release_asset(&release_api, dest) {
@@ -971,10 +966,11 @@ impl PluginRuntime {
 
     pub fn on_post_render(&mut self, article: &Article, html: &str) -> Result<String> {
         let input = convert::plugin::article(article);
-        let result = self
-            .bindings
-            .thought_plugin_hook()
-            .call_on_post_render(&mut self.store, &input, html)?;
+        let result = self.bindings.thought_plugin_hook().call_on_post_render(
+            &mut self.store,
+            &input,
+            html,
+        )?;
         Ok(result)
     }
 }

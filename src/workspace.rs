@@ -1,9 +1,23 @@
-use crate::types::{
-    article::Article,
-    metadata::{FailToOpenMetadata, MetadataExt, ThemeSource, WorkspaceMetadata},
+use crate::{
+    engine::Engine,
+    types::{
+        article::Article,
+        category::Category,
+        metadata::{
+            ArticleMetadata, CategoryMetadata, FailToOpenMetadata, MetadataExt, ThemeSource,
+            WorkspaceMetadata,
+        },
+    },
+    utils::write,
 };
-use std::path::PathBuf;
-use tokio_stream::{Stream, once};
+use futures::StreamExt;
+use log::warn;
+use std::{
+    fs as std_fs, io,
+    path::{Path, PathBuf},
+};
+use time::OffsetDateTime;
+use tokio_stream::Stream;
 
 /// structure of workspace is as follows:
 /// ```text
@@ -78,29 +92,195 @@ impl Workspace {
         path: impl Into<Vec<String>>,
         description: impl Into<String>,
     ) {
-        todo!()
+        let path_vec = path.into();
+        let description = description.into();
+        if let Err(err) = self
+            .ensure_category_chain(&path_vec, Some(description.as_str()))
+            .await
+        {
+            warn!(
+                "failed to create category `{}`: {err}",
+                format_category_path(&path_vec)
+            );
+        }
     }
 
     pub async fn create_article(
         &self,
         path: impl Into<Vec<String>>,
     ) -> Result<Article, FailToCreateCategory> {
-        todo!()
+        let mut segments = path.into();
+        if segments.is_empty() {
+            return Err(FailToCreateCategory::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "article path must include at least a slug",
+            )));
+        }
+
+        let slug = segments
+            .pop()
+            .expect("article path guaranteed to contain a slug");
+        let category_path = segments;
+
+        self.ensure_category_chain(&category_path, None)
+            .await
+            .map_err(FailToCreateCategory::Io)?;
+
+        let mut article_dir = self.path.join("articles");
+        for segment in &category_path {
+            article_dir.push(segment);
+        }
+        article_dir.push(&slug);
+        tokio::fs::create_dir_all(&article_dir)
+            .await
+            .map_err(FailToCreateCategory::Io)?;
+
+        let metadata_path = article_dir.join("Article.toml");
+        let content_path = article_dir.join("article.md");
+
+        let title = slug_to_title(&slug);
+        let mut metadata = ArticleMetadata::new(self.metadata.owner().to_owned());
+        let summary = format!("Draft article for {title}");
+        metadata.set_description(summary.clone());
+        metadata
+            .save_to_file(&metadata_path)
+            .await
+            .map_err(FailToCreateCategory::Io)?;
+
+        let content = format!("# {title}\n\nWrite your article here.\n");
+        write(&content_path, content.as_bytes())
+            .await
+            .map_err(FailToCreateCategory::Io)?;
+
+        let category = Category::open(&self.path, category_path.clone())
+            .await
+            .map_err(|err| {
+                FailToCreateCategory::Io(io::Error::new(io::ErrorKind::Other, err.to_string()))
+            })?;
+
+        Ok(Article::new(
+            title, slug, category, metadata, summary, content,
+        ))
     }
 
     pub async fn generate(
         &self,
         output: impl AsRef<std::path::Path>,
     ) -> Result<(), std::io::Error> {
-        todo!()
+        let engine = Engine::new(self.clone())
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        engine.generate(output).await
     }
 
-    pub fn categories(&self) -> impl Stream<Item = Result<Self, FailToOpenMetadata>> + Send + Sync {
-        once(todo!())
+    pub fn categories(
+        &self,
+    ) -> impl Stream<Item = Result<Category, FailToOpenMetadata>> + Send + Sync {
+        let root = self.path.clone();
+        let paths = match collect_category_paths(&root.join("articles")) {
+            Ok(paths) => paths,
+            Err(err) => {
+                warn!("failed to enumerate categories: {err}");
+                Vec::new()
+            }
+        };
+
+        tokio_stream::iter(paths.into_iter()).then(move |path| {
+            let root = root.clone();
+            async move {
+                let metadata_path = path
+                    .iter()
+                    .fold(root.join("articles"), |acc, segment| acc.join(segment))
+                    .join("Category.toml");
+                let metadata = CategoryMetadata::open(metadata_path).await?;
+                Ok(Category::new(path, metadata))
+            }
+        })
     }
 
     pub fn articles(&self) -> impl Stream<Item = Article> + Send + Sync {
-        once(todo!())
+        let root = self.path.clone();
+        let paths = match collect_article_paths(&root.join("articles")) {
+            Ok(paths) => paths,
+            Err(err) => {
+                warn!("failed to enumerate articles: {err}");
+                Vec::new()
+            }
+        };
+
+        tokio_stream::iter(paths.into_iter())
+            .then(move |path| {
+                let root = root.clone();
+                async move { Article::open(&root, path).await.ok() }
+            })
+            .filter_map(|article| async move { article })
+    }
+
+    async fn ensure_category_chain(
+        &self,
+        path: &[String],
+        description: Option<&str>,
+    ) -> io::Result<()> {
+        let articles_root = self.path.join("articles");
+        tokio::fs::create_dir_all(&articles_root).await?;
+
+        let root_metadata_path = articles_root.join("Category.toml");
+        if !tokio::fs::try_exists(&root_metadata_path).await? {
+            let metadata = CategoryMetadata::from_raw(
+                OffsetDateTime::now_utc(),
+                self.metadata.title().to_owned(),
+                self.metadata.description().to_owned(),
+            );
+            metadata.save_to_file(&root_metadata_path).await?;
+        } else if let Some(desc) = description {
+            if path.is_empty() {
+                let existing = CategoryMetadata::open(&root_metadata_path)
+                    .await
+                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+                let updated = CategoryMetadata::from_raw(
+                    existing.created(),
+                    existing.name().to_owned(),
+                    desc.to_owned(),
+                );
+                updated.save_to_file(&root_metadata_path).await?;
+            }
+        }
+
+        let mut current = articles_root;
+        for (index, segment) in path.iter().enumerate() {
+            current.push(segment);
+            tokio::fs::create_dir_all(&current).await?;
+            let metadata_path = current.join("Category.toml");
+            if tokio::fs::try_exists(&metadata_path).await? {
+                if index == path.len() - 1 {
+                    if let Some(desc) = description {
+                        let existing = CategoryMetadata::open(&metadata_path)
+                            .await
+                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+                        let updated = CategoryMetadata::from_raw(
+                            existing.created(),
+                            existing.name().to_owned(),
+                            desc.to_owned(),
+                        );
+                        updated.save_to_file(&metadata_path).await?;
+                    }
+                }
+            } else {
+                let desc = if index == path.len() - 1 {
+                    description.unwrap_or_default()
+                } else {
+                    ""
+                };
+                let metadata = CategoryMetadata::from_raw(
+                    OffsetDateTime::now_utc(),
+                    segment.clone(),
+                    desc.to_owned(),
+                );
+                metadata.save_to_file(&metadata_path).await?;
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn clean(&self) -> Result<(), std::io::Error> {
@@ -114,6 +294,102 @@ impl Workspace {
             tokio::fs::remove_dir_all(cache_path).await?;
         }
         Ok(())
+    }
+}
+
+fn collect_category_paths(root: &Path) -> io::Result<Vec<Vec<String>>> {
+    let mut categories = Vec::new();
+    if !root.exists() {
+        return Ok(categories);
+    }
+
+    fn walk(dir: &Path, prefix: &mut Vec<String>, acc: &mut Vec<Vec<String>>) -> io::Result<()> {
+        if dir.join("Category.toml").exists() {
+            acc.push(prefix.clone());
+        }
+
+        for entry in std_fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let entry_path = entry.path();
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                prefix.push(name);
+                walk(&entry_path, prefix, acc)?;
+                prefix.pop();
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut prefix = Vec::new();
+    walk(root, &mut prefix, &mut categories)?;
+    Ok(categories)
+}
+
+fn collect_article_paths(root: &Path) -> io::Result<Vec<Vec<String>>> {
+    let mut articles = Vec::new();
+    if !root.exists() {
+        return Ok(articles);
+    }
+
+    fn walk(dir: &Path, prefix: &mut Vec<String>, acc: &mut Vec<Vec<String>>) -> io::Result<()> {
+        for entry in std_fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let entry_path = entry.path();
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                prefix.push(name);
+                if entry_path.join("Article.toml").exists() {
+                    acc.push(prefix.clone());
+                    prefix.pop();
+                    continue;
+                }
+                walk(&entry_path, prefix, acc)?;
+                prefix.pop();
+            }
+        }
+        Ok(())
+    }
+
+    let mut prefix = Vec::new();
+    walk(root, &mut prefix, &mut articles)?;
+    Ok(articles)
+}
+
+fn slug_to_title(slug: &str) -> String {
+    let mut words = Vec::new();
+
+    for word in slug.split(|c: char| matches!(c, '-' | '_' | ' ')) {
+        if word.is_empty() {
+            continue;
+        }
+
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            let mut capitalized = String::new();
+            capitalized.extend(first.to_uppercase());
+            capitalized.extend(chars);
+            words.push(capitalized);
+        }
+    }
+
+    if words.is_empty() {
+        "Untitled Article".to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+fn format_category_path(path: &[String]) -> String {
+    if path.is_empty() {
+        "<root>".to_string()
+    } else {
+        path.join("/")
     }
 }
 

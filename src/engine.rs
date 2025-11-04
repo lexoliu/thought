@@ -1,11 +1,13 @@
 use anyhow::anyhow;
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, io, path::Path, sync::Arc};
 
-use futures::future::try_join_all;
+use futures::{StreamExt, future::try_join_all};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use tokio::{fs::read_to_string, spawn};
-use tokio_stream::StreamExt;
+use tokio::{
+    fs::{create_dir_all, read_to_string, write},
+    spawn,
+};
 
 use crate::{
     plugin::PluginManager,
@@ -57,14 +59,14 @@ impl Engine {
             }
         }
 
-        self.0
-            .plugins
-            .copy_theme_assets(output.join("assets"))?;
+        self.0.plugins.copy_theme_assets(output.join("assets"))?;
 
         let mut articles_preview = Vec::new();
         let mut changed_articles = Vec::new();
 
-        while let Some(article) = self.0.workspace.articles().next().await {
+        let article_stream = self.0.workspace.articles();
+        futures::pin_mut!(article_stream);
+        while let Some(article) = article_stream.next().await {
             let sha256 = article.sha256();
             let path: Vec<String> = article
                 .category()
@@ -118,7 +120,33 @@ impl Engine {
         _articles: &[ArticlePreview],
         output: impl AsRef<Path>,
     ) -> Result<(), std::io::Error> {
-        todo!()
+        let processed = self
+            .0
+            .plugins
+            .apply_pre_render(article.clone())
+            .await
+            .map_err(to_io_error)?;
+
+        let themed = self
+            .0
+            .plugins
+            .theme_runtime()
+            .generate_page(&processed)
+            .map_err(to_io_error)?;
+
+        let html = self
+            .0
+            .plugins
+            .apply_post_render(&processed, themed)
+            .await
+            .map_err(to_io_error)?;
+
+        let output = output.as_ref().to_path_buf();
+        if let Some(parent) = output.parent() {
+            create_dir_all(parent).await?;
+        }
+        write(&output, html).await?;
+        Ok(())
     }
 
     async fn render_index(
@@ -126,6 +154,22 @@ impl Engine {
         articles: &[ArticlePreview],
         output: impl AsRef<Path>,
     ) -> Result<(), std::io::Error> {
-        todo!()
+        let html = self
+            .0
+            .plugins
+            .theme_runtime()
+            .generate_index(articles)
+            .map_err(to_io_error)?;
+
+        let output = output.as_ref().to_path_buf();
+        if let Some(parent) = output.parent() {
+            create_dir_all(parent).await?;
+        }
+        write(&output, html).await?;
+        Ok(())
     }
+}
+
+fn to_io_error(err: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, err.to_string())
 }

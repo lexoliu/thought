@@ -148,11 +148,7 @@ impl CategoryMetadata {
     }
 
     /// Construct metadata from raw fields. Intended for internal deserialization paths.
-    pub(crate) fn from_raw(
-        created: OffsetDateTime,
-        name: String,
-        description: String,
-    ) -> Self {
+    pub(crate) fn from_raw(created: OffsetDateTime, name: String, description: String) -> Self {
         Self {
             created,
             name,
@@ -398,8 +394,14 @@ pub struct PluginSpec {
 /// Where a plugin should be fetched from.
 #[derive(Debug, Clone)]
 pub enum PluginLocator {
-    CratesIo { version: String },
-    Git { repo: String, rev: Option<String>, is_github: bool },
+    CratesIo {
+        version: String,
+    },
+    Git {
+        repo: String,
+        rev: Option<String>,
+        is_github: bool,
+    },
     Local(PathBuf),
 }
 
