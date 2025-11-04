@@ -11,7 +11,6 @@ time = { workspace = true }
 bincode = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-log = { workspace = true }
 url.workspace = true
 whoami = { workspace = true }
 reqwest = { version = "0.12.24", features = ["blocking", "json"] }
@@ -28,6 +27,13 @@ sha2 = "0.10.9"
 pulldown-cmark.workspace = true
 toml.workspace = true
 thought-plugin.workspace = true
+indicatif = { version = "0.18.0", optional = true }
+clap = { version = "4.5.49", features = ["derive"], optional = true }
+color-eyre = { version = "0.6.5", features = ["issue-url"], optional = true }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["json","env-filter"]}
+tracing-error = "0.2.1"
+
 
 [workspace]
 members = ["themes/zenflow", "plugin"]
@@ -52,7 +58,6 @@ askama_derive = "0.12.5"
 whoami = "1.6.1"
 flate2 = "1.1.5"
 tar = "0.4.44"
-log = "0.4.28"
 
 [workspace.lints]
 rust.missing_docs = "warn"
@@ -67,3 +72,12 @@ clippy.pedantic = "warn"
 clippy.nursery = "warn"
 clippy.cargo = "warn"
 clippy.multiple_crate_versions =  { level = "allow", priority = 1 }
+
+[[bin]]
+path = "src/cli/main.rs"
+name = "thought"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:indicatif","dep:clap","dep:color-eyre"]

@@ -207,13 +207,14 @@ impl PluginLoader {
         for spec in specs {
             let resolved = self.resolve_single(spec).await?;
             if let Some(expected) = resolved.spec.declared_kind
-                && expected != resolved.manifest.kind {
-                    return Err(PluginLoadError::IncompatibleKind {
-                        name: resolved.manifest.name.clone(),
-                        expected,
-                        actual: resolved.manifest.kind.clone(),
-                    });
-                }
+                && expected != resolved.manifest.kind
+            {
+                return Err(PluginLoadError::IncompatibleKind {
+                    name: resolved.manifest.name.clone(),
+                    expected,
+                    actual: resolved.manifest.kind.clone(),
+                });
+            }
 
             match resolved.manifest.kind {
                 PluginKind::Theme => {
@@ -452,10 +453,12 @@ impl PluginLoader {
         }
         self.clone_repo(repo, rev, dest)?;
 
-        if is_github && mode == BuildMode::Precompiled
-            && let Some(result) = self.try_download_github_release(repo, rev, dest) {
-                result?;
-            }
+        if is_github
+            && mode == BuildMode::Precompiled
+            && let Some(result) = self.try_download_github_release(repo, rev, dest)
+        {
+            result?;
+        }
 
         Ok(())
     }

@@ -66,6 +66,7 @@ impl Engine {
 
         let article_stream = self.0.workspace.articles();
         futures::pin_mut!(article_stream);
+        // collect changed articles
         while let Some(article) = article_stream.next().await {
             let sha256 = article.sha256();
             let path: Vec<String> = article
