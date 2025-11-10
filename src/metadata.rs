@@ -2,7 +2,7 @@
 //! This module provides the data structures and traits for working with article and category metadata.
 
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -160,28 +160,100 @@ impl CategoryMetadata {
 /// Metadata for a workspace (your entire blog)
 /// Locate in `Thought.toml` at the root of the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMetadata {
+pub struct WorkspaceManifest {
     name: String,
     description: String,
     owner: String,
-    theme: ThemeSource,
-    plugins: BTreeMap<String, PluginSource>,
+    plugins: PluginRegistry,
 }
 
-impl WorkspaceMetadata {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRegistry {
+    map: HashMap<String, PluginLocator>,
+}
+
+impl Default for PluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PluginRegistry {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, name: impl Into<String>, locator: PluginLocator) {
+        self.map.insert(name.into(), locator);
+    }
+
+    pub fn register_entry(&mut self, entry: PluginEntry) {
+        self.map.insert(entry.name, entry.locator);
+    }
+
+    #[must_use]
+    pub fn plugins(&self) -> impl Iterator<Item = (&str, &PluginLocator)> + Send + Sync {
+        self.map.iter().map(|(k, v)| (k.as_str(), v))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginEntry {
+    name: String,
+    #[serde(flatten)]
+    locator: PluginLocator,
+}
+
+impl PluginEntry {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    #[must_use]
+    pub fn locator(&self) -> &PluginLocator {
+        &self.locator
+    }
+
+    pub fn git(
+        name: impl Into<String>,
+        url: impl Into<String>,
+        rev: impl Into<Option<String>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            locator: PluginLocator::Git {
+                url: url.into(),
+                rev: rev.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+// not tag
+#[serde(untagged)]
+pub enum PluginLocator {
+    CratesIo { version: String },
+    Git { url: String, rev: Option<String> },
+    Local { path: PathBuf },
+}
+
+impl WorkspaceManifest {
     /// Create a new workspace metadata with the given parameters
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
         owner: impl Into<String>,
-        theme: ThemeSource,
+        plugins: PluginRegistry,
     ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
             owner: owner.into(),
-            theme,
-            plugins: BTreeMap::new(),
+            plugins,
         }
     }
 
@@ -202,91 +274,21 @@ impl WorkspaceMetadata {
         self.description.as_str()
     }
 
+    // return a iterator over plugins
+    #[must_use]
+    pub fn plugins(&self) -> impl Iterator<Item = (&str, &PluginLocator)> + Send + Sync {
+        self.plugins.plugins()
+    }
+
     /// Get the owner of the workspace
     #[must_use]
     pub const fn owner(&self) -> &str {
         self.owner.as_str()
     }
-
-    /// Get the theme source of the workspace
-    #[must_use]
-    pub const fn theme(&self) -> &ThemeSource {
-        &self.theme
-    }
-
-    /// Get the plugins of the workspace
-    #[must_use]
-    pub const fn plugins(&self) -> &BTreeMap<String, PluginSource> {
-        &self.plugins
-    }
-}
-
-/// Source of a theme
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThemeSource {
-    name: String,
-    #[serde(flatten)]
-    source: PluginSource,
-}
-
-impl ThemeSource {
-    /// Create a new theme source with the given name and source
-    pub fn new(name: impl Into<String>, source: PluginSource) -> Self {
-        Self {
-            name: name.into(),
-            source,
-        }
-    }
-
-    /// Create a new theme source from a Git repository
-    pub fn git(name: impl Into<String>, repo: impl Into<String>, rev: Option<String>) -> Self {
-        Self {
-            name: name.into(),
-            source: PluginSource::Git {
-                repo: repo.into(),
-                rev,
-            },
-        }
-    }
-
-    /// Get the name of the theme
-    #[must_use]
-    pub const fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Get the source of the theme
-    #[must_use]
-    pub const fn source(&self) -> &PluginSource {
-        &self.source
-    }
-}
-
-/// Source of a plugin
-///
-/// Plugins can be sourced from different locations, such as crates.io, Git repositories, local paths, or URLs.
-///
-/// `Thought` would load plugins to its wasm runtime from these sources accordingly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PluginSource {
-    /// Plugin from crates.io with the given version
-    CratesIo {
-        /// Version requirement (e.g., "0.1", "^1.2.3")
-        version: String,
-    },
-    /// Plugin from a Git repository
-    Git {
-        /// Git repository URL
-        repo: String,
-        /// Git revision (branch, tag, or commit)
-        rev: Option<String>,
-    },
-    /// Plugin from local filesystem
-    Local(PathBuf),
 }
 
 /// Classification of plugin roles.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginKind {
     Theme,
@@ -308,7 +310,8 @@ pub enum ManifestError {
 }
 
 /// Metadata declared by an individual plugin.
-#[derive(Debug, Clone, Deserialize)]
+/// Locate in `Plugin.toml` at the root of the plugin package.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginManifest {
     pub name: String,
     pub author: String,
@@ -349,164 +352,6 @@ impl FromStr for PluginKind {
             "hook" => Ok(Self::Hook),
             _ => Err(ManifestError::MissingField("type")),
         }
-    }
-}
-
-/// Preferred build workflow for resolving a plugin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BuildMode {
-    /// Expect a precompiled `main.wasm`.
-    Precompiled,
-    /// Build the plugin from its Cargo project.
-    Cargo,
-}
-
-impl Default for BuildMode {
-    fn default() -> Self {
-        Self::Precompiled
-    }
-}
-
-/// Errors that can occur while parsing `Thought.toml`.
-#[derive(Debug, thiserror::Error)]
-pub enum WaterError {
-    /// `Thought.toml` was unreadable.
-    #[error("failed to read Thought.toml: {0}")]
-    Io(#[from] std::io::Error),
-    /// `Thought.toml` contained invalid TOML.
-    #[error("failed to parse Thought.toml: {0}")]
-    Parse(#[from] toml::de::Error),
-    /// A required field is missing from the configuration.
-    #[error("missing field `{0}` in Thought.toml")]
-    MissingField(&'static str),
-}
-
-/// Concrete plugin specification resolved from `Thought.toml`.
-#[derive(Debug, Clone)]
-pub struct PluginSpec {
-    pub name: String,
-    pub declared_kind: Option<PluginKind>,
-    pub mode: BuildMode,
-    pub locator: PluginLocator,
-}
-
-/// Where a plugin should be fetched from.
-#[derive(Debug, Clone)]
-pub enum PluginLocator {
-    CratesIo {
-        version: String,
-    },
-    Git {
-        repo: String,
-        rev: Option<String>,
-        is_github: bool,
-    },
-    Local(PathBuf),
-}
-
-/// Workspace-level plugin configuration (`Plugin.toml`).
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct PluginToml {
-    #[serde(default)]
-    plugins: BTreeMap<String, PluginEntryRaw>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum PluginEntryRaw {
-    Simple(String),
-    Detailed(PluginEntry),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PluginEntry {
-    #[serde(rename = "type")]
-    declared_kind: Option<PluginKind>,
-    #[serde(default)]
-    mode: Option<BuildMode>,
-    version: Option<String>,
-    github: Option<String>,
-    repo: Option<String>,
-    rev: Option<String>,
-    path: Option<PathBuf>,
-}
-
-impl PluginToml {
-    /// Load the `Plugin.toml` file from disk.
-    ///
-    /// # Errors
-    /// Returns [`WaterError`] if the file cannot be read or parsed.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, WaterError> {
-        let data = fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&data)?;
-        Ok(config)
-    }
-
-    /// Resolve plugin specifications declared in the configuration.
-    ///
-    /// # Errors
-    /// Returns [`WaterError`] if any entry is invalid or missing required fields.
-    pub fn plugins(&self) -> Result<Vec<PluginSpec>, WaterError> {
-        self.plugins
-            .iter()
-            .map(|(name, entry)| match entry {
-                PluginEntryRaw::Simple(version) => {
-                    PluginSpec::from_version(name.clone(), version.clone())
-                }
-                PluginEntryRaw::Detailed(entry) => {
-                    PluginSpec::try_from_entry(name.clone(), entry.clone())
-                }
-            })
-            .collect()
-    }
-}
-
-impl PluginSpec {
-    fn from_version(name: String, version: String) -> Result<Self, WaterError> {
-        if version.trim().is_empty() {
-            return Err(WaterError::MissingField("plugins.version"));
-        }
-        Ok(Self {
-            name,
-            declared_kind: None,
-            mode: BuildMode::Precompiled,
-            locator: PluginLocator::CratesIo { version },
-        })
-    }
-
-    fn try_from_entry(name: String, entry: PluginEntry) -> Result<Self, WaterError> {
-        let locator = if let Some(version) = entry.version {
-            if version.trim().is_empty() {
-                return Err(WaterError::MissingField("plugins.version"));
-            }
-            PluginLocator::CratesIo { version }
-        } else if let Some(path) = entry.path {
-            PluginLocator::Local(path)
-        } else if let Some(github) = entry.github {
-            PluginLocator::Git {
-                repo: github,
-                rev: entry.rev,
-                is_github: true,
-            }
-        } else if let Some(repo) = entry.repo {
-            PluginLocator::Git {
-                repo,
-                rev: entry.rev,
-                is_github: false,
-            }
-        } else {
-            return Err(WaterError::MissingField(
-                "plugins.version | plugins.github | plugins.repo | plugins.path",
-            ));
-        };
-
-        Ok(PluginSpec {
-            name,
-            declared_kind: entry.declared_kind,
-            mode: entry.mode.unwrap_or_default(),
-            locator,
-        })
     }
 }
 
@@ -558,4 +403,5 @@ pub trait MetadataExt: Serialize + DeserializeOwned {
 
 impl MetadataExt for CategoryMetadata {}
 impl MetadataExt for ArticleMetadata {}
-impl MetadataExt for WorkspaceMetadata {}
+impl MetadataExt for WorkspaceManifest {}
+impl MetadataExt for PluginManifest {}

@@ -33,6 +33,7 @@ color-eyre = { version = "0.6.5", features = ["issue-url"], optional = true }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["json","env-filter"]}
 tracing-error = "0.2.1"
+tantivy = "0.25.0"
 
 
 [workspace]
