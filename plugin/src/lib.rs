@@ -1,4 +1,3 @@
-pub use askama;
 pub use pulldown_cmark;
 pub mod types {
     wit_bindgen::generate!({

@@ -5,6 +5,5 @@ edition = "2021"
 
 [dependencies]
 pulldown-cmark.workspace = true
-askama.workspace = true
 time.workspace = true
 wit-bindgen = "0.46.0"
