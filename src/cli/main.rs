@@ -1,7 +1,7 @@
 use core::time::Duration;
 use std::{env::current_dir, process::exit};
 
-use clap::{Parser, Subcommand};
+use clap::{Command, Parser, Subcommand};
 use color_eyre::{
     Section,
     config::HookBuilder,
@@ -26,12 +26,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
-}
-
-impl Cli {
-    pub fn require_workspace(&self) -> bool {
-        !matches!(&self.command, Commands::Create { .. })
-    }
 }
 
 #[derive(Subcommand)]
@@ -94,23 +88,39 @@ async fn main() {
 
 async fn entry(cli: Cli) -> eyre::Result<()> {
     let current_dir = current_dir()?;
-    if cli.require_workspace() {
-        let workspace = Workspace::open(&current_dir)
-            .await
-            .note("Can't open workspace")?;
-        workspace.generate(current_dir.join("build")).await?;
-    }
 
     if let Commands::Create { name } = cli.command {
         Workspace::create(current_dir, name).await?;
-
         info!("Workspace created successfully");
+        return Ok(());
+    }
+
+    let workspace = Workspace::open(&current_dir)
+        .await
+        .note("Can't open workspace")?;
+    if let Commands::Article(article_cmd) = cli.command {
+        match article_cmd {
+            ArticleCommands::Create { title, category } => {
+                workspace
+                    .create_article(title, None)
+                    .await
+                    .note("Failed to create article")?;
+                info!("Article created successfully");
+            }
+        }
+    } else if let Commands::Generate = cli.command {
+        long_task(
+            "Generating site...",
+            workspace.generate(workspace.build_dir()),
+            "Site generated successfully",
+        )
+        .await;
     }
 
     Ok(())
 }
 
-pub fn long_task(loading_msg: &'static str, f: impl FnOnce(), complete_msg: &'static str) {
+pub async fn long_task(loading_msg: &'static str, f: impl Future, complete_msg: &'static str) {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} {msg}")
@@ -120,7 +130,7 @@ pub fn long_task(loading_msg: &'static str, f: impl FnOnce(), complete_msg: &'st
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(loading_msg);
 
-    f();
+    f.await;
 
     pb.finish_with_message(complete_msg);
 }

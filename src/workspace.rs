@@ -118,7 +118,7 @@ impl Workspace {
 
         let workspace = Self::new(&root, manifest);
 
-        let _ = workspace.create_article(["hello"]).await?;
+        let _ = workspace.create_article("Hello,world", None).await?;
 
         Ok(workspace)
     }
@@ -171,43 +171,23 @@ impl Workspace {
 
     pub async fn create_article(
         &self,
-        path: impl IntoIterator<Item = impl AsRef<str>>,
+        title: impl Into<String>,
+        category: Option<Category>,
     ) -> Result<Article, FailToCreateArticle> {
-        let segments: Vec<String> = path
-            .into_iter()
-            .map(|segment| segment.as_ref().trim().to_string())
-            .filter(|segment| !segment.is_empty())
-            .collect();
+        let title = title.into();
+        let slug = title
+            .to_lowercase()
+            .replace(' ', "-")
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-')
+            .collect::<String>();
 
-        if segments.is_empty() {
-            return Err(FailToCreateArticle::InvalidPath);
-        }
-
-        ensure_root_category(self)
-            .await
-            .map_err(FailToCreateArticle::Io)?;
-
-        let slug = segments
-            .last()
-            .cloned()
-            .ok_or(FailToCreateArticle::InvalidPath)?;
-
-        let article_dir = segments
-            .iter()
-            .fold(self.articles_dir(), |acc, segment| acc.join(segment));
-        async_fs::create_dir_all(&article_dir)
-            .await
-            .map_err(FailToCreateArticle::Io)?;
-
-        let category_segments = if segments.len() > 1 {
-            segments[..segments.len() - 1].to_vec()
+        let mut article_dir = if let Some(ref category) = category {
+            category.dir()
         } else {
-            Vec::new()
+            self.articles_dir()
         };
-
-        ensure_category_chain(self, &category_segments)
-            .await
-            .map_err(FailToCreateArticle::Io)?;
+        article_dir.push(&slug);
 
         let metadata_path = article_dir.join("Article.toml");
         if async_fs::metadata(&metadata_path).await.is_err() {
@@ -220,23 +200,31 @@ impl Workspace {
 
         let content_path = article_dir.join("article.md");
         if async_fs::metadata(&content_path).await.is_err() {
-            let template = format!("# {slug}\n\nWrite something thoughtful here.\n");
+            let template = format!("# {title}\n\n");
             write(&content_path, template.as_bytes())
                 .await
                 .map_err(FailToCreateArticle::Io)?;
         }
 
-        Article::open(self.clone(), segments)
-            .await
-            .map_err(|err| match err {
-                FailToOpenArticle::WorkspaceNotFound => {
-                    FailToCreateArticle::Category(FailToOpenCategory::WorkspaceNotFound)
-                }
-                FailToOpenArticle::ArticleNotFound => FailToCreateArticle::InvalidPath,
-                FailToOpenArticle::FailToOpenMetadata(inner) => {
-                    FailToCreateArticle::Io(std::io::Error::other(inner))
-                }
-            })
+        Article::open(
+            self.clone(),
+            category
+                .map(|cat| cat.segments)
+                .unwrap_or_default()
+                .into_iter()
+                .chain(std::iter::once(slug.to_string()))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(|err| match err {
+            FailToOpenArticle::WorkspaceNotFound => {
+                FailToCreateArticle::Category(FailToOpenCategory::WorkspaceNotFound)
+            }
+            FailToOpenArticle::ArticleNotFound => FailToCreateArticle::InvalidPath,
+            FailToOpenArticle::FailToOpenMetadata(inner) => {
+                FailToCreateArticle::Io(std::io::Error::other(inner))
+            }
+        })
     }
 
     pub async fn generate(&self, output: impl AsRef<std::path::Path>) -> eyre::Result<()> {
@@ -348,20 +336,6 @@ async fn ensure_root_category(workspace: &Workspace) -> std::io::Result<()> {
         Some(workspace.manifest().description()),
     )
     .await
-}
-
-async fn ensure_category_chain(workspace: &Workspace, segments: &[String]) -> std::io::Result<()> {
-    if segments.is_empty() {
-        return ensure_root_category(workspace).await;
-    }
-
-    let mut current = workspace.articles_dir();
-    for segment in segments {
-        current.push(segment);
-        async_fs::create_dir_all(&current).await?;
-        ensure_category_metadata(&current, segment, None).await?;
-    }
-    Ok(())
 }
 
 async fn walk_categories(
