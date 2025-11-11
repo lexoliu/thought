@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{bail, eyre};
 use flate2::read::GzDecoder;
 use git2::Repository;
 use reqwest::Client;
@@ -330,7 +330,21 @@ fn parse_github(url: &str) -> Option<(String, String)> {
 }
 
 async fn run_component_build(dir: &Path) -> color_eyre::eyre::Result<()> {
+    // Check the cargo-component is installed
+    if Command::new("cargo")
+        .arg("component")
+        .arg("--version")
+        .output()
+        .await
+        .is_err()
+    {
+        bail!(
+            "cargo-component is not installed. Please install it via `cargo install cargo-component`"
+        );
+    }
+
     let status = Command::new("cargo")
+        .arg("component")
         .arg("build")
         .arg("--release")
         // use Cargo.toml in the plugin directory
