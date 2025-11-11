@@ -102,21 +102,6 @@ impl ArticleMetadata {
     pub fn add_tag(&mut self, tag: impl Into<String>) {
         self.tags.push(tag.into());
     }
-
-    /// Construct metadata from raw fields. Intended for internal deserialization paths.
-    pub(crate) fn from_raw(
-        created: OffsetDateTime,
-        tags: Vec<String>,
-        author: String,
-        description: Option<String>,
-    ) -> Self {
-        Self {
-            created,
-            tags,
-            author,
-            description,
-        }
-    }
 }
 
 impl CategoryMetadata {
@@ -147,13 +132,9 @@ impl CategoryMetadata {
         self.description.as_str()
     }
 
-    /// Construct metadata from raw fields. Intended for internal deserialization paths.
-    pub(crate) fn from_raw(created: OffsetDateTime, name: String, description: String) -> Self {
-        Self {
-            created,
-            name,
-            description,
-        }
+    /// Update the description of the category
+    pub fn set_description(&mut self, description: impl Into<String>) {
+        self.description = description.into();
     }
 }
 
@@ -193,7 +174,7 @@ impl PluginRegistry {
         self.map.insert(entry.name, entry.locator);
     }
 
-    #[must_use]
+    /// Get an iterator over the registered plugins
     pub fn plugins(&self) -> impl Iterator<Item = (&str, &PluginLocator)> + Send + Sync {
         self.map.iter().map(|(k, v)| (k.as_str(), v))
     }
@@ -275,7 +256,6 @@ impl WorkspaceManifest {
     }
 
     // return a iterator over plugins
-    #[must_use]
     pub fn plugins(&self) -> impl Iterator<Item = (&str, &PluginLocator)> + Send + Sync {
         self.plugins.plugins()
     }

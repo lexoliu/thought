@@ -17,7 +17,7 @@ At this step, we collect the data required for the build. We parse markdown and 
 
 Rendering is split into two distinct stages:
 
-- **Lifecycle plugins** run one-at-a-time in declaration order. Each plugin receives the article produced by the previous stage. `on_pre_render` can mutate the article model (e.g. enrich metadata), while `on_post_render` mutates the generated HTML.
-- **Theme rendering** happens between the two plugin hooks. Themes expose pure functions (`generate_page`, `generate_index`) that return HTML without touching I/O, clocks, or randomness. We instantiate themes fresh for every render so page generation remains deterministic and parallelisable.
+- **Lifecycle hooks** run one-at-a-time in declaration order. Each hook receives the article returned by the previous hook. `on_pre_render` can mutate the article model (e.g. enrich metadata), while `on_post_render` mutates the generated HTML. Hooks are *pure* WebAssembly components: they cannot touch I/O, clocks, or randomness. We still instantiate them with the WASI Preview 2 command world so they link cleanly, but the host does not preopen any directories or provide side-effecting capabilities.
+- **Theme rendering** happens between the two hook invocations. Themes also implement pure functions (`generate_page`, `generate_index`) that return HTML purely from the provided data.
 
-Because plugins can rely on WASI Preview 2 capabilities, they may interact with the filesystem namespaces (`/tmp`, `/cache`, `/build`) or clock APIs. Themes, by contrast, are pure and side-effect free.
+This purity requirement means every plugin invocation is deterministic and side-effect free, enabling aggressive caching and embarrassingly parallel rendering. Because no shared state leaks into the guest, we can instantiate themes and hooks on-demand across threads without worrying about `!Sync` data inside Wasi contexts. WASI Preview 2 remains our ABI, but it is treated strictly as a type/ABI surface rather than an escape hatch into host resources.

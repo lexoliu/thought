@@ -1,6 +1,7 @@
 use std::{io, path::Path};
 
-use crate::{article::Article, workspace::Workspace};
+use crate::{article::Article, utils::write, workspace::Workspace};
+use serde_json::json;
 use tantivy::{
     Index, IndexWriter,
     collector::TopDocs,
@@ -108,6 +109,24 @@ impl Searcher {
     }
 
     pub async fn build_wasm(&self, output: impl AsRef<Path>) -> io::Result<()> {
-        todo!()
+        let mut records = Vec::new();
+        let mut stream = Box::pin(self.workspace.articles());
+        while let Some(result) = stream.next().await {
+            let article = result.map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            records.push(json!({
+                "title": article.title(),
+                "slug": article.slug(),
+                "category": article.category().segments(),
+                "description": article.description(),
+            }));
+        }
+
+        if let Some(parent) = output.as_ref().parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let payload = serde_json::to_vec(&records)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        write(output, &payload).await
     }
 }

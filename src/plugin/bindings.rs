@@ -16,15 +16,18 @@ pub mod hook {
 pub mod theme {
     wasmtime::component::bindgen!({
         path: "plugin/wit/plugin.wit",
+        with: {
+            "thought:plugin/types":super::hook::thought::plugin::types,
+        },
         world: "theme-runtime",
     });
 }
-type WITTimestamp = hook::thought::plugin::types::Timestamp;
-type WITArticle = hook::thought::plugin::types::Article;
-type WITArticlePreview = hook::thought::plugin::types::ArticlePreview;
-type WITCategory = hook::thought::plugin::types::Category;
-type WITArticleMetadata = hook::thought::plugin::types::ArticleMetadata;
-type WITCategoryMetadata = hook::thought::plugin::types::CategoryMetadata;
+pub type WITTimestamp = hook::thought::plugin::types::Timestamp;
+pub type WITArticle = hook::thought::plugin::types::Article;
+pub type WITArticlePreview = hook::thought::plugin::types::ArticlePreview;
+pub type WITCategory = hook::thought::plugin::types::Category;
+pub type WITArticleMetadata = hook::thought::plugin::types::ArticleMetadata;
+pub type WITCategoryMetadata = hook::thought::plugin::types::CategoryMetadata;
 impl From<&Article> for WITArticle {
     fn from(article: &Article) -> Self {
         WITArticle {

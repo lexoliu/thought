@@ -13,7 +13,6 @@ use crate::{
 /// An article with its full content
 #[derive(Debug, Clone)]
 pub struct Article {
-    workspace: Workspace,
     content: String, // markdown content
     preview: ArticlePreview,
 }
@@ -57,7 +56,6 @@ impl ArticlePreview {
 impl Article {
     /// Create a new article with the given parameters
     pub async fn create(
-        workspace: Workspace,
         title: impl Into<String>,
         slug: impl Into<String>,
         category: Category,
@@ -66,7 +64,6 @@ impl Article {
         content: impl Into<String>,
     ) -> Self {
         Self {
-            workspace,
             content: content.into(),
             preview: ArticlePreview {
                 title: title.into(),
@@ -124,7 +121,6 @@ impl Article {
         let extraction = extract(&content);
 
         Ok(Self {
-            workspace,
             content: extraction.content.to_string(),
             preview: ArticlePreview {
                 title: extraction.title.unwrap_or_else(|| {
