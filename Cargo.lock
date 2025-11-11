@@ -2987,7 +2987,6 @@ name = "thought-plugin"
 version = "0.1.0"
 dependencies = [
  "askama",
- "askama_derive",
  "pulldown-cmark",
  "time",
  "wit-bindgen",
@@ -4423,16 +4422,6 @@ dependencies = [
  "quote",
  "syn",
  "synstructure",
-]
-
-[[package]]
-name = "zenflow"
-version = "0.1.0"
-dependencies = [
- "askama",
- "bincode",
- "serde",
- "thought-plugin",
 ]
 
 [[package]]

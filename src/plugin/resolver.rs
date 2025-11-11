@@ -331,9 +331,11 @@ fn parse_github(url: &str) -> Option<(String, String)> {
 
 async fn run_component_build(dir: &Path) -> color_eyre::eyre::Result<()> {
     let status = Command::new("cargo")
-        .arg("component")
         .arg("build")
         .arg("--release")
+        // use Cargo.toml in the plugin directory
+        .arg("--manifest-path")
+        .arg(dir.join("Cargo.toml"))
         .current_dir(dir)
         .status()
         .await?;

@@ -150,6 +150,7 @@ pub struct WorkspaceManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistry {
+    #[serde(flatten)]
     map: HashMap<String, PluginLocator>,
 }
 
@@ -217,9 +218,17 @@ impl PluginEntry {
 // not tag
 #[serde(untagged)]
 pub enum PluginLocator {
-    CratesIo { version: String },
-    Git { url: String, rev: Option<String> },
-    Local { path: PathBuf },
+    CratesIo {
+        version: String,
+    },
+    Git {
+        #[serde(rename = "git")]
+        url: String,
+        rev: Option<String>,
+    },
+    Local {
+        path: PathBuf,
+    },
 }
 
 impl WorkspaceManifest {

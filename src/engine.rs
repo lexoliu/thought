@@ -25,7 +25,6 @@ impl Engine {
         if async_fs::metadata(output).await.is_ok() {
             async_fs::remove_dir_all(output).await?;
         }
-        async_fs::create_dir_all(output).await?;
 
         let stream = self.workspace.articles();
         futures::pin_mut!(stream);

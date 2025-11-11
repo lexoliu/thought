@@ -114,13 +114,17 @@ async fn entry(cli: Cli) -> eyre::Result<()> {
             workspace.generate(workspace.build_dir()),
             "Site generated successfully",
         )
-        .await;
+        .await?;
     }
 
     Ok(())
 }
 
-pub async fn long_task(loading_msg: &'static str, f: impl Future, complete_msg: &'static str) {
+pub async fn long_task<T, E>(
+    loading_msg: &'static str,
+    f: impl Future<Output = Result<T, E>>,
+    complete_msg: &'static str,
+) -> Result<T, E> {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} {msg}")
@@ -130,7 +134,8 @@ pub async fn long_task(loading_msg: &'static str, f: impl Future, complete_msg: 
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(loading_msg);
 
-    f.await;
+    let result = f.await?;
 
     pb.finish_with_message(complete_msg);
+    Ok(result)
 }
