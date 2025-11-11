@@ -12,8 +12,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Category {
     workspace: Workspace,
-    segments: Vec<String>,
-    metadata: CategoryMetadata,
+    pub(crate) segments: Vec<String>,
+    pub(crate) metadata: CategoryMetadata,
 }
 
 impl Category {
@@ -180,7 +180,8 @@ async fn list_child_categories(
     let mut entries = fs::read_dir(category.dir()).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if entry.file_type().await?.is_dir() && fs::metadata(path.join("Category.toml")).await.is_ok()
+        if entry.file_type().await?.is_dir()
+            && fs::metadata(path.join("Category.toml")).await.is_ok()
         {
             match Category::open(category.workspace(), &path).await {
                 Ok(child) => {
@@ -206,7 +207,8 @@ async fn list_category_articles(
     let mut entries = fs::read_dir(category.dir()).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if entry.file_type().await?.is_dir() && fs::metadata(path.join("Article.toml")).await.is_ok()
+        if entry.file_type().await?.is_dir()
+            && fs::metadata(path.join("Article.toml")).await.is_ok()
         {
             let relative = path
                 .strip_prefix(category.workspace().articles_dir())

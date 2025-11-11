@@ -1,25 +1,23 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use color_eyre::eyre;
 use futures::TryStreamExt;
-use tokio::fs as async_fs;
+use tokio::{fs as async_fs, spawn, task::JoinHandle};
 
-use crate::{
-    article::Article,
-    plugin::{IndexToken, PluginManager},
-    utils::write,
-    workspace::Workspace,
-};
+use crate::{plugin::PluginManager, utils::write, workspace::Workspace};
 
 pub struct Engine {
     workspace: Workspace,
-    plugins: PluginManager,
+    plugins: Arc<PluginManager>,
 }
 
 impl Engine {
     pub async fn new(workspace: Workspace) -> eyre::Result<Self> {
         let plugins = PluginManager::resolve_workspace(&workspace).await?;
-        Ok(Self { workspace, plugins })
+        Ok(Self {
+            workspace,
+            plugins: Arc::new(plugins),
+        })
     }
 
     pub async fn generate(&self, output: impl AsRef<Path>) -> eyre::Result<()> {
@@ -29,29 +27,38 @@ impl Engine {
         }
         async_fs::create_dir_all(output).await?;
 
-        let mut tokens: Vec<IndexToken> = Vec::new();
         let stream = self.workspace.articles();
         futures::pin_mut!(stream);
 
+        let mut tasks: Vec<JoinHandle<eyre::Result<()>>> = Vec::new();
+
+        let mut previews = Vec::new();
+
         while let Some(article) = stream.try_next().await? {
-            let rendered = self.plugins.render_article(&article)?;
-            let (token, html) = rendered.into_parts();
-            tokens.push(token);
-            write_article(output, &article, &html).await?;
+            let plugins = self.plugins.clone();
+            previews.push(article.preview().clone());
+            let article_output = output.join(article.segments().join("/"));
+
+            tasks.push(spawn(async move {
+                let rendered = plugins.render_article(article)?;
+                write(article_output, rendered.as_bytes()).await?;
+                Ok(())
+            }));
         }
 
-        let index_html = self.plugins.render_index(&tokens)?;
-        write(output.join("index.html"), index_html.as_bytes()).await?;
+        let plugins = self.plugins.clone();
+        let index_file_path = output.join("index.html");
+        tasks.push(spawn(async move {
+            let index_html = plugins.render_index(previews)?;
+            write(index_file_path, index_html.as_bytes()).await?;
+            Ok(())
+        }));
+
+        // Wait for all tasks to complete
+        for task in tasks {
+            task.await??;
+        }
 
         Ok(())
     }
-}
-
-async fn write_article(output: &Path, article: &Article, html: &str) -> std::io::Result<()> {
-    let mut dir = output.to_path_buf();
-    for segment in article.segments() {
-        dir.push(segment);
-    }
-    async_fs::create_dir_all(&dir).await?;
-    write(dir.join("index.html"), html.as_bytes()).await
 }

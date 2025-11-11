@@ -25,10 +25,10 @@ use crate::utils::{read_to_string, write};
 #[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CategoryMetadata {
     #[serde(with = "time::serde::rfc3339")]
-    created: OffsetDateTime,
-    name: String,
+    pub(crate) created: OffsetDateTime,
+    pub(crate) name: String,
     #[serde(default)]
-    description: String,
+    pub(crate) description: String,
 }
 
 /// Metadata for an article
@@ -42,11 +42,11 @@ pub struct CategoryMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ArticleMetadata {
     #[serde(with = "time::serde::rfc3339")]
-    created: OffsetDateTime,
+    pub(crate) created: OffsetDateTime,
     #[serde(default)]
-    tags: Vec<String>,
-    author: String,
-    description: Option<String>,
+    pub(crate) tags: Vec<String>,
+    pub(crate) author: String,
+    pub(crate) description: Option<String>,
 }
 
 impl ArticleMetadata {

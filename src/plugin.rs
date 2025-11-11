@@ -8,7 +8,11 @@ use wasmtime_wasi::{self, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, W
 mod bindings;
 mod resolver;
 
-use crate::{article::Article, metadata::PluginKind, workspace::Workspace};
+use crate::{
+    article::{Article, ArticlePreview},
+    metadata::PluginKind,
+    workspace::Workspace,
+};
 
 use bindings::{
     WITArticle, WITArticlePreview,
@@ -29,36 +33,6 @@ struct ThemeHandle {
 
 struct HookHandle {
     pre: hook::HookRuntimePre<PluginInstanceState>,
-}
-
-pub struct RenderedArticle {
-    preview: PreviewWrapper,
-    html: String,
-}
-
-pub struct IndexToken(PreviewWrapper);
-
-struct PreviewWrapper {
-    preview: WITArticlePreview,
-}
-
-impl PreviewWrapper {
-    fn into_token(self) -> IndexToken {
-        IndexToken(self)
-    }
-}
-
-impl IndexToken {
-    fn as_wit(&self) -> &WITArticlePreview {
-        &self.0.preview
-    }
-}
-
-impl RenderedArticle {
-    #[must_use]
-    pub fn into_parts(self) -> (IndexToken, String) {
-        (self.preview.into_token(), self.html)
-    }
 }
 
 impl PluginManager {
@@ -104,7 +78,9 @@ impl PluginManager {
         })
     }
 
-    pub fn render_article(&self, article: &Article) -> eyre::Result<RenderedArticle> {
+    /// Render an article using the plugins
+    /// Returns the rendered HTML.
+    pub fn render_article(&self, article: Article) -> eyre::Result<String> {
         let mut wit_article: WITArticle = article.into();
 
         for hook in &self.hooks {
@@ -132,20 +108,15 @@ impl PluginManager {
                 .map_err(|err| eyre!(err))?;
         }
 
-        Ok(RenderedArticle {
-            preview: PreviewWrapper {
-                preview: wit_article.preview.clone(),
-            },
-            html: processed_html,
-        })
+        Ok(processed_html)
     }
 
-    pub fn render_index(&self, previews: &[IndexToken]) -> eyre::Result<String> {
+    /// Render the index using the theme plugin
+    /// Returns the rendered HTML.
+    pub fn render_index(&self, previews: Vec<ArticlePreview>) -> eyre::Result<String> {
         let (mut store, instance) = self.instantiate_theme()?;
-        let wit_previews: Vec<_> = previews
-            .iter()
-            .map(|token| token.as_wit().clone())
-            .collect();
+        let wit_previews: Vec<WITArticlePreview> =
+            previews.into_iter().map(|preview| preview.into()).collect();
         let rendered = instance
             .thought_plugin_theme()
             .call_generate_index(&mut store, &wit_previews)

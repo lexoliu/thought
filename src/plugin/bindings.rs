@@ -28,11 +28,11 @@ pub type WITArticlePreview = hook::thought::plugin::types::ArticlePreview;
 pub type WITCategory = hook::thought::plugin::types::Category;
 pub type WITArticleMetadata = hook::thought::plugin::types::ArticleMetadata;
 pub type WITCategoryMetadata = hook::thought::plugin::types::CategoryMetadata;
-impl From<&Article> for WITArticle {
-    fn from(article: &Article) -> Self {
+impl From<Article> for WITArticle {
+    fn from(article: Article) -> Self {
         WITArticle {
-            preview: article.preview().into(),
-            content: article.content().to_string(),
+            preview: article.preview.into(),
+            content: article.content,
         }
     }
 }
@@ -46,44 +46,44 @@ impl From<OffsetDateTime> for WITTimestamp {
     }
 }
 
-impl From<&ArticleMetadata> for WITArticleMetadata {
-    fn from(metadata: &crate::metadata::ArticleMetadata) -> Self {
+impl From<ArticleMetadata> for WITArticleMetadata {
+    fn from(metadata: ArticleMetadata) -> Self {
         WITArticleMetadata {
-            created: metadata.created().into(),
-            tags: metadata.tags().to_vec(),
-            author: metadata.author().to_string(),
-            description: metadata.description().map(ToString::to_string),
+            created: metadata.created.into(),
+            tags: metadata.tags,
+            author: metadata.author,
+            description: metadata.description,
         }
     }
 }
 
-impl From<&ArticlePreview> for WITArticlePreview {
-    fn from(article: &ArticlePreview) -> Self {
+impl From<ArticlePreview> for WITArticlePreview {
+    fn from(article: ArticlePreview) -> Self {
         WITArticlePreview {
-            title: article.title().to_string(),
-            slug: article.slug().to_string(),
-            category: article.category().into(),
-            metadata: article.metadata().into(),
-            description: article.description().to_string(),
+            title: article.title,
+            slug: article.slug,
+            category: article.category.into(),
+            metadata: article.metadata.into(),
+            description: article.description,
         }
     }
 }
 
-impl From<&Category> for WITCategory {
-    fn from(category: &Category) -> Self {
+impl From<Category> for WITCategory {
+    fn from(category: Category) -> Self {
         WITCategory {
-            path: category.segments().clone(),
-            metadata: category.metadata().into(),
+            path: category.segments,
+            metadata: category.metadata.into(),
         }
     }
 }
 
-impl From<&CategoryMetadata> for WITCategoryMetadata {
-    fn from(metadata: &CategoryMetadata) -> Self {
+impl From<CategoryMetadata> for WITCategoryMetadata {
+    fn from(metadata: CategoryMetadata) -> Self {
         WITCategoryMetadata {
-            created: metadata.created().into(),
-            name: metadata.name().to_string(),
-            description: metadata.description().to_string(),
+            created: metadata.created.into(),
+            name: metadata.name,
+            description: metadata.description,
         }
     }
 }

@@ -13,18 +13,18 @@ use crate::{
 /// An article with its full content
 #[derive(Debug, Clone)]
 pub struct Article {
-    content: String, // markdown content
-    preview: ArticlePreview,
+    pub(crate) content: String, // markdown content
+    pub(crate) preview: ArticlePreview,
 }
 
 /// A preview of an article without its content
 #[derive(Debug, Clone)]
 pub struct ArticlePreview {
-    title: String,
-    slug: String,
-    category: Category,
-    metadata: ArticleMetadata,
-    description: String,
+    pub(crate) title: String,
+    pub(crate) slug: String,
+    pub(crate) category: Category,
+    pub(crate) metadata: ArticleMetadata,
+    pub(crate) description: String,
 }
 
 impl ArticlePreview {

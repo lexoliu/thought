@@ -41,7 +41,7 @@ impl ResolvedPlugin {
 
     #[must_use]
     pub fn wasm_path(&self) -> PathBuf {
-        self.dir.join("main.wasm")
+        self.dir().join("main.wasm")
     }
 
     /// Whether the plugin has been built
@@ -80,8 +80,6 @@ pub enum ResolvePluginError {
     Network(#[from] reqwest::Error),
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
-    #[error("Unsupported plugin locator: {0}")]
-    UnsupportedLocator(String),
 }
 
 pub async fn resolve_plugin(
