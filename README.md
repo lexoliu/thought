@@ -10,6 +10,7 @@ A blazingly fast static site generator for your blog, written in Rust.
 - **Live Preview:** A built-in server to preview your site locally.
 - **Pure Themes:** Themes are deterministic WebAssembly components that render pages.
 - **Lifecycle Plugins:** WASI Preview 2 plugins run sequential hooks around rendering.
+- **Search:** Built-in multilingual, fuzzy search powered by Tantivy.
 
 ## Installation
 
@@ -62,6 +63,11 @@ cargo install --path .
 - `thought generate [--output <path>]`: Generates the static site.
 - `thought serve [--port <port>]`: Serves the generated site.
 - `thought clean`: Removes the `build` directory.
+- `thought search "<query>"`: Rebuilds the search index and performs a fuzzy, multilingual search through your articles.
+
+## Search Integration
+
+Running `thought generate` emits a browser bundle under `assets/thought-search/` (a WebAssembly payload plus `thought-search.js`). Themes can include the helper script via `helpers::search_script_path()` or `helpers::search_script_path_at_depth(depth)` (useful for nested pages), then call `window.ThoughtSearch.search("<query>")` to fetch ranked matches without reimplementing indexing logic.
 
 ## Configuration
 

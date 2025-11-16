@@ -209,6 +209,11 @@ pub mod helpers {
     use std::fmt;
     use time::{format_description, format_description::well_known, OffsetDateTime};
 
+    const SEARCH_ASSET_DIR: &str = "assets/thought-search";
+    const SEARCH_WASM_FILENAME: &str = "thought-search.wasm";
+    const SEARCH_JS_FILENAME: &str = "thought-search.js";
+    const SEARCH_SCRIPT_PATH: &str = "assets/thought-search/thought-search.js";
+
     /// Render a Markdown string into HTML.
     #[must_use]
     pub fn markdown_to_html(markdown: &str) -> String {
@@ -247,6 +252,72 @@ pub mod helpers {
         }
         base.push_str(&article_output_file(article));
         base
+    }
+
+    #[must_use]
+    pub const fn search_asset_dir() -> &'static str {
+        SEARCH_ASSET_DIR
+    }
+
+    #[must_use]
+    pub const fn search_js_filename() -> &'static str {
+        SEARCH_JS_FILENAME
+    }
+
+    #[must_use]
+    pub const fn search_wasm_filename() -> &'static str {
+        SEARCH_WASM_FILENAME
+    }
+
+    /// Path to the bundled search loader JavaScript relative to the site root.
+    #[must_use]
+    pub const fn search_script_path() -> &'static str {
+        SEARCH_SCRIPT_PATH
+    }
+
+    /// Path to the bundled search WebAssembly binary relative to the site root.
+    #[must_use]
+    pub fn search_wasm_path() -> String {
+        format!("{}/{}", SEARCH_ASSET_DIR, SEARCH_WASM_FILENAME)
+    }
+
+    fn relative_prefix(depth: usize) -> String {
+        if depth == 0 {
+            String::new()
+        } else {
+            "../".repeat(depth)
+        }
+    }
+
+    /// Path to the search script relative to a page that is nested `depth` directories deep.
+    #[must_use]
+    pub fn search_script_path_at_depth(depth: usize) -> String {
+        format!("{}{}", relative_prefix(depth), SEARCH_SCRIPT_PATH)
+    }
+
+    /// Path to the search wasm relative to a page that is nested `depth` directories deep.
+    #[must_use]
+    pub fn search_wasm_path_at_depth(depth: usize) -> String {
+        format!(
+            "{}{}/{}",
+            relative_prefix(depth),
+            SEARCH_ASSET_DIR,
+            SEARCH_WASM_FILENAME
+        )
+    }
+
+    /// Convenience helper for article pages.
+    #[must_use]
+    pub fn search_script_for_article(article: &ArticlePreview) -> String {
+        let depth = article.category().path().len();
+        search_script_path_at_depth(depth)
+    }
+
+    /// Convenience helper for article pages.
+    #[must_use]
+    pub fn search_wasm_for_article(article: &ArticlePreview) -> String {
+        let depth = article.category().path().len();
+        search_wasm_path_at_depth(depth)
     }
 
     /// Format an [`OffsetDateTime`] using RFC3339.

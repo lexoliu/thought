@@ -1,16 +1,47 @@
-use std::{io, path::Path};
+use std::path::Path;
 
-use crate::{article::Article, utils::write, workspace::Workspace};
+use color_eyre::eyre::{self, eyre};
+use futures::TryStreamExt;
+use serde::Serialize;
 use serde_json::json;
 use tantivy::{
-    Index, IndexWriter,
+    Index, IndexWriter, Term,
     collector::TopDocs,
-    query::QueryParser,
-    schema::{Field, STORED, Schema, TEXT},
+    doc,
+    query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser},
+    schema::{
+        Field, IndexRecordOption, OwnedValue, STORED, Schema, TantivyDocument, TextFieldIndexing,
+        TextOptions,
+    },
+    tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer},
 };
-use tokio_stream::StreamExt;
+use tokio::fs;
+use unicode_segmentation::UnicodeSegmentation;
+use wat::parse_str;
 
-/// A searcher that can index and search articles in a workspace.
+use crate::{article::Article, utils::write, workspace::Workspace};
+
+const TOKENIZER: &str = "thought_tokenizer";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub title: String,
+    pub description: String,
+    pub permalink: String,
+}
+
+impl From<Article> for SearchHit {
+    fn from(article: Article) -> Self {
+        let permalink = format!("{}.html", article.segments().join("/"));
+        Self {
+            title: article.title().to_string(),
+            description: article.description().to_string(),
+            permalink,
+        }
+    }
+}
+
+/// Indexer and search runner for workspace articles.
 pub struct Searcher {
     workspace: Workspace,
     index: Index,
@@ -20,23 +51,31 @@ pub struct Searcher {
 }
 
 impl Searcher {
-    /// Open a searcher for the given workspace, using the specified cache file path.
-    pub async fn open(workspace: Workspace) -> io::Result<Self> {
-        let cache = workspace.cache_dir().join("search_db");
+    /// Open (or create) the search index located in `.thought/search_db`.
+    pub async fn open(workspace: Workspace) -> eyre::Result<Self> {
+        let cache_dir = workspace.cache_dir().join("search_db");
+        if !fs::try_exists(&cache_dir).await? {
+            fs::create_dir_all(&cache_dir).await?;
+        }
 
-        let mut schema_builder = Schema::builder();
-        let title_field = schema_builder.add_text_field("title", TEXT | STORED);
-        let content_field = schema_builder.add_text_field("content", TEXT);
-        let path_field = schema_builder.add_text_field("path", STORED);
-        let schema = schema_builder.build();
-
-        let index = if cache.exists() {
-            Index::open_in_dir(&cache).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+        let schema = Self::build_schema();
+        let meta_path = cache_dir.join("meta.json");
+        let index = if fs::try_exists(&meta_path).await? {
+            Index::open_in_dir(&cache_dir)?
         } else {
-            tokio::fs::create_dir_all(&cache).await?;
-            Index::create_in_dir(&cache, schema.clone())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            Index::create_in_dir(&cache_dir, schema.clone())?
         };
+
+        let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(RemoveLongFilter::limit(40))
+            .filter(LowerCaser)
+            .build();
+        index.tokenizers().register(TOKENIZER, analyzer);
+
+        let schema = index.schema();
+        let title_field = schema.get_field("title").map_err(|err| eyre!(err))?;
+        let content_field = schema.get_field("content").map_err(|err| eyre!(err))?;
+        let path_field = schema.get_field("path").map_err(|err| eyre!(err))?;
 
         Ok(Self {
             workspace,
@@ -47,86 +86,148 @@ impl Searcher {
         })
     }
 
-    pub async fn index(&self) -> io::Result<()> {
-        let mut writer: IndexWriter = self
-            .index
-            .writer(50_000_000)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fn build_schema() -> Schema {
+        let mut builder = Schema::builder();
+        let text_field_indexing = TextFieldIndexing::default()
+            .set_tokenizer(TOKENIZER)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+        let stored_text = TextOptions::default()
+            .set_indexing_options(text_field_indexing.clone())
+            .set_stored();
 
-        writer
-            .delete_all_documents()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        builder.add_text_field("title", stored_text.clone());
+        builder.add_text_field(
+            "content",
+            TextOptions::default().set_indexing_options(text_field_indexing),
+        );
+        builder.add_text_field("path", STORED);
+        builder.build()
+    }
 
-        while let Some(article) = self.workspace.articles().try_next().await? {
-            let mut doc = tantivy::Document::default();
-            doc.add_text(self.title_field, &article.title);
-            doc.add_text(self.content_field, &article.content);
-            doc.add_text(self.path_field, article.path.to_string_lossy());
-            writer
-                .add_document(doc)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    /// Rebuild the search index from scratch.
+    pub async fn index(&self) -> eyre::Result<()> {
+        let mut writer: IndexWriter = self.index.writer(50_000_000)?;
+        writer.delete_all_documents()?;
+
+        let stream = self.workspace.articles();
+        futures::pin_mut!(stream);
+        while let Some(article) = stream.as_mut().try_next().await? {
+            let doc = doc!(
+                self.title_field => article.title().to_string(),
+                self.content_field => article.content().to_string(),
+                self.path_field => article.dir().to_string_lossy().to_string(),
+            );
+            writer.add_document(doc)?;
         }
 
-        writer
-            .commit()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
+        writer.commit()?;
         Ok(())
     }
 
-    pub async fn search(&self, query: &str) -> io::Result<Vec<Article>> {
-        let reader = self
-            .index
-            .reader()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    /// Search for a query string, returning fuzzy matches.
+    pub async fn search(&self, query: &str, limit: usize) -> eyre::Result<Vec<SearchHit>> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let reader = self.index.reader()?;
         let searcher = reader.searcher();
 
         let query_parser =
             QueryParser::for_index(&self.index, vec![self.title_field, self.content_field]);
-        let query = query_parser
-            .parse_query(query)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let parsed = query_parser.parse_query(query)?;
 
-        let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(10))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut subqueries: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Should, parsed)];
+        for token in Self::tokenize(query) {
+            let content_term = Term::from_field_text(self.content_field, &token);
+            let title_term = Term::from_field_text(self.title_field, &token);
+            subqueries.push((
+                Occur::Should,
+                Box::new(FuzzyTermQuery::new(content_term, 2, true)),
+            ));
+            subqueries.push((
+                Occur::Should,
+                Box::new(FuzzyTermQuery::new(title_term, 2, true)),
+            ));
+        }
 
-        let mut results = Vec::new();
-        for (_score, doc_address) in top_docs {
-            let retrieved_doc = searcher
-                .doc(doc_address)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let query = BooleanQuery::new(subqueries);
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
 
-            if let Some(path_value) = retrieved_doc.get_first(self.path_field) {
-                if let Some(path_str) = path_value.as_text() {
-                    let article = self.workspace.read_article(Path::new(path_str)).await?;
-                    results.push(article);
+        let mut hits = Vec::new();
+        for (_score, address) in top_docs {
+            let doc: TantivyDocument = searcher.doc(address)?;
+            if let Some(path_value) = doc.get_first(self.path_field) {
+                let owned: OwnedValue = path_value.into();
+                if let OwnedValue::Str(path) = owned {
+                    let article = self.workspace.read_article(Path::new(&path)).await?;
+                    hits.push(article.into());
                 }
             }
         }
-
-        Ok(results)
+        Ok(hits)
     }
 
-    pub async fn build_wasm(&self, output: impl AsRef<Path>) -> io::Result<()> {
+    fn tokenize(input: &str) -> Vec<String> {
+        input
+            .unicode_words()
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| token.to_string())
+            .collect()
+    }
+
+    /// Emit a WASM-friendly JSON payload containing article metadata for client-side search fallback.
+    pub async fn build_wasm(&self, output: impl AsRef<Path>) -> eyre::Result<()> {
+        let payload = self.export_records().await?;
+        let wasm = Self::encode_payload_as_wasm(&payload)?;
+
+        if let Some(parent) = output.as_ref().parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        write(output, wasm).await?;
+        Ok(())
+    }
+
+    async fn export_records(&self) -> eyre::Result<Vec<u8>> {
         let mut records = Vec::new();
-        let mut stream = Box::pin(self.workspace.articles());
-        while let Some(result) = stream.next().await {
-            let article = result.map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let stream = self.workspace.articles();
+        futures::pin_mut!(stream);
+        while let Some(article) = stream.as_mut().try_next().await? {
             records.push(json!({
                 "title": article.title(),
                 "slug": article.slug(),
                 "category": article.category().segments(),
                 "description": article.description(),
+                "permalink": format!("{}.html", article.segments().join("/")),
             }));
         }
 
-        if let Some(parent) = output.as_ref().parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        Ok(serde_json::to_vec(&records)?)
+    }
 
-        let payload = serde_json::to_vec(&records)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-        write(output, &payload).await
+    fn encode_payload_as_wasm(payload: &[u8]) -> eyre::Result<Vec<u8>> {
+        let pages = ((payload.len() as u32 + 0xFFFF) / 0x10000).max(1);
+        let encoded_data = Self::encode_wat_bytes(payload);
+        let module = format!(
+            r#"(module
+                (memory (export "memory") {pages})
+                (func (export "thought_search_data_len") (result i32) (i32.const {len}))
+                (func (export "thought_search_data_ptr") (result i32) (i32.const 0))
+                (data (i32.const 0) "{data}")
+            )"#,
+            pages = pages,
+            len = payload.len(),
+            data = encoded_data
+        );
+        let wasm = parse_str(&module).map_err(|err| eyre!(err))?;
+        Ok(wasm)
+    }
+
+    fn encode_wat_bytes(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|byte| format!("\\{:02x}", byte))
+            .collect::<String>()
     }
 }

@@ -8,4 +8,4 @@ pub(crate) mod utils;
 
 pub mod article;
 pub mod category;
-//pub mod search;
+pub mod search;

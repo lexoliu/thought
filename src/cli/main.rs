@@ -1,14 +1,14 @@
 use core::time::Duration;
 use std::{env::current_dir, process::exit};
 
-use clap::{Command, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use color_eyre::{
     Section,
     config::HookBuilder,
     eyre::{self},
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use thought::workspace::Workspace;
+use thought::{search::Searcher, workspace::Workspace};
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -39,6 +39,11 @@ enum Commands {
     Article(ArticleCommands),
 
     Generate,
+
+    /// Search indexed articles with fuzzy, multilingual matching.
+    Search {
+        query: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -88,36 +93,46 @@ async fn main() {
 
 async fn entry(cli: Cli) -> eyre::Result<()> {
     let current_dir = current_dir()?;
+    let command = cli.command;
 
-    if let Commands::Create { name } = cli.command {
-        Workspace::create(current_dir, name).await?;
-        info!("Workspace created successfully");
-        return Ok(());
-    }
-
-    let workspace = Workspace::open(&current_dir)
-        .await
-        .note("Can't open workspace")?;
-    if let Commands::Article(article_cmd) = cli.command {
-        match article_cmd {
-            ArticleCommands::Create { title, category } => {
-                workspace
-                    .create_article(title, None)
-                    .await
-                    .note("Failed to create article")?;
-                info!("Article created successfully");
+    match command {
+        Commands::Create { name } => {
+            Workspace::create(current_dir, name).await?;
+            info!("Workspace created successfully");
+            Ok(())
+        }
+        command => {
+            let workspace = Workspace::open(&current_dir)
+                .await
+                .note("Can't open workspace")?;
+            match command {
+                Commands::Article(article_cmd) => match article_cmd {
+                    ArticleCommands::Create { title, category: _ } => {
+                        workspace
+                            .create_article(title, None)
+                            .await
+                            .note("Failed to create article")?;
+                        info!("Article created successfully");
+                        Ok(())
+                    }
+                },
+                Commands::Generate => {
+                    long_task(
+                        "Generating site...",
+                        workspace.generate(workspace.build_dir()),
+                        "Site generated successfully",
+                    )
+                    .await?;
+                    Ok(())
+                }
+                Commands::Search { query } => {
+                    run_search(&workspace, &query, cli.json).await?;
+                    Ok(())
+                }
+                _ => unreachable!(),
             }
         }
-    } else if let Commands::Generate = cli.command {
-        long_task(
-            "Generating site...",
-            workspace.generate(workspace.build_dir()),
-            "Site generated successfully",
-        )
-        .await?;
     }
-
-    Ok(())
 }
 
 pub async fn long_task<T, E>(
@@ -138,4 +153,41 @@ pub async fn long_task<T, E>(
 
     pb.finish_with_message(complete_msg);
     Ok(result)
+}
+
+async fn run_search(workspace: &Workspace, query: &str, emit_json: bool) -> eyre::Result<()> {
+    let searcher = Searcher::open(workspace.clone())
+        .await
+        .note("Failed to open search index")?;
+    long_task(
+        "Indexing articles for search...",
+        searcher.index(),
+        "Search index ready",
+    )
+    .await
+    .note("Failed to build search index")?;
+
+    let hits = searcher
+        .search(query, 20)
+        .await
+        .note("Failed to search articles")?;
+
+    if emit_json {
+        println!("{}", serde_json::to_string_pretty(&hits)?);
+        return Ok(());
+    }
+
+    if hits.is_empty() {
+        println!("No results for \"{query}\"");
+        return Ok(());
+    }
+
+    println!("Found {} result(s):", hits.len());
+    for hit in hits {
+        println!("• {} -> {}", hit.title, hit.permalink);
+        if !hit.description.is_empty() {
+            println!("  {}", hit.description);
+        }
+    }
+    Ok(())
 }
