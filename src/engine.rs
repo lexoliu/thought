@@ -2,6 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use color_eyre::eyre;
 use futures::TryStreamExt;
+use sha2::{Digest, Sha256};
 use tokio::{fs as async_fs, spawn, sync::Mutex, task::JoinHandle};
 
 use crate::{
@@ -42,11 +43,13 @@ impl Engine {
         let mut tasks: Vec<JoinHandle<eyre::Result<()>>> = Vec::new();
 
         let mut previews = Vec::new();
+        let mut fingerprint = Sha256::new();
 
         while let Some(article) = stream.try_next().await? {
             let plugins = self.plugins.clone();
             let cache = cache.clone();
             previews.push(article.preview().clone());
+            fingerprint.update(article.sha256().as_bytes());
             let relative_path = article.segments().join("/");
             let article_output = output.join(format!("{relative_path}.html"));
 
@@ -87,16 +90,17 @@ impl Engine {
         }
 
         cache.lock().await.persist().await?;
-        self.emit_search_bundle(output).await?;
+        let fingerprint = format!("{:x}", fingerprint.finalize());
+        self.emit_search_bundle(output, &fingerprint).await?;
 
         Ok(())
     }
 }
 
 impl Engine {
-    async fn emit_search_bundle(&self, output: &Path) -> eyre::Result<()> {
+    async fn emit_search_bundle(&self, output: &Path, fingerprint: &str) -> eyre::Result<()> {
         let searcher = Searcher::open(self.workspace.clone()).await?;
-        searcher.index().await?;
+        searcher.ensure_index(Some(fingerprint)).await?;
 
         let asset_dir = output.join(search_asset_dir());
         async_fs::create_dir_all(&asset_dir).await?;

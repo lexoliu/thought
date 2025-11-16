@@ -15,6 +15,7 @@ use zenwave::{Client, Error as HttpError, ResponseExt, StatusCode};
 
 use crate::{
     metadata::{FailToOpenMetadata, MetadataExt, PluginLocator, PluginManifest},
+    utils::write,
     workspace::Workspace,
 };
 
@@ -87,47 +88,60 @@ pub async fn resolve_plugin(
     name: &str,
     locator: &PluginLocator,
 ) -> Result<ResolvedPlugin, ResolvePluginError> {
-    let built = false;
     let plugin_root = workspace.cache_dir().join("plugins");
     fs::create_dir_all(&plugin_root).await?;
     let normalized_name = normalize_name(name);
     let plugin_dir = plugin_root.join(&normalized_name);
-    if fs::metadata(&plugin_dir).await.is_ok() {
+    let locator_stamp = serde_json::to_vec(locator).expect("locator serialization failed");
+    let descriptor_path = plugin_dir.join(".locator.json");
+    let allow_reuse = !matches!(locator, PluginLocator::Local { .. });
+    let mut reuse_existing = false;
+    if allow_reuse && fs::metadata(&plugin_dir).await.is_ok() {
+        if let Ok(existing) = fs::read(&descriptor_path).await {
+            reuse_existing = existing == locator_stamp;
+        }
+    }
+
+    if !reuse_existing && fs::metadata(&plugin_dir).await.is_ok() {
         fs::remove_dir_all(&plugin_dir).await?;
     }
 
     // prepare plugin to be used within the workspace's cache directory
-    let dir: PathBuf = match locator {
-        PluginLocator::CratesIo { version } => {
-            download_crate(name, version, &plugin_dir).await?;
-            plugin_dir.clone()
-        }
-        PluginLocator::Git { url, rev } => {
-            if let Some((author, repo)) = parse_github(url) {
-                let tag = rev.as_deref().unwrap_or("latest");
-                if let Some(resolved) = try_github_release(&author, &repo, tag, &plugin_dir).await?
-                {
-                    resolved
+    if !reuse_existing {
+        match locator {
+            PluginLocator::CratesIo { version } => {
+                download_crate(name, version, &plugin_dir).await?;
+            }
+            PluginLocator::Git { url, rev } => {
+                if let Some((author, repo)) = parse_github(url) {
+                    let tag = rev.as_deref().unwrap_or("latest");
+                    if try_github_release(&author, &repo, tag, &plugin_dir)
+                        .await?
+                        .is_none()
+                    {
+                        clone_repo(url, rev.as_deref(), &plugin_dir).await?;
+                    }
                 } else {
                     clone_repo(url, rev.as_deref(), &plugin_dir).await?;
-                    plugin_dir.clone()
                 }
-            } else {
-                clone_repo(url, rev.as_deref(), &plugin_dir).await?;
-                plugin_dir.clone()
             }
+            PluginLocator::Local { path } => {
+                let source = fs::canonicalize(path).await?;
+                copy_dir_recursive(&source, &plugin_dir).await?;
+            }
+        };
+        if allow_reuse {
+            write(&descriptor_path, &locator_stamp).await?;
         }
-        PluginLocator::Local { path } => {
-            let source = fs::canonicalize(path).await?;
-            copy_dir_recursive(&source, &plugin_dir).await?;
-            plugin_dir.clone()
-        }
-    };
+    }
+
+    let dir = plugin_dir.clone();
 
     let manifest = PluginManifest::open(dir.join("Plugin.toml")).await?;
+    let wasm_ready = fs::try_exists(dir.join("main.wasm")).await.unwrap_or(false);
 
     Ok(ResolvedPlugin {
-        built,
+        built: wasm_ready,
         manifest,
         dir,
     })

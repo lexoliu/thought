@@ -29,6 +29,23 @@
       .replace(/[\u0300-\u036f]/g, "");
   }
 
+  function unique(tokens) {
+    return Array.from(new Set(tokens));
+  }
+
+  function tokenizeQuery(query) {
+    const normalized = normalize(query);
+    const words = normalized.split(/\s+/).filter(Boolean);
+    if (words.length > 0 && words.some((token) => token.length > 1)) {
+      return unique(words);
+    }
+
+    const chars = Array.from(normalized)
+      .map((char) => char.trim())
+      .filter(Boolean);
+    return unique(chars);
+  }
+
   function fuzzyScore(target, token) {
     if (!token) return 0;
     if (target.includes(token)) {
@@ -87,9 +104,7 @@
       return [];
     }
     const index = await loadIndex();
-    const normalizedTokens = normalize(trimmed)
-      .split(/\s+/)
-      .filter(Boolean);
+    const normalizedTokens = tokenizeQuery(trimmed);
     if (normalizedTokens.length === 0) {
       return [];
     }

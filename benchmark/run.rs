@@ -272,6 +272,11 @@ url: https://example.com
 root: /
 per_page: 0
 language: en
+
+search:
+  path: search.json
+  field: post
+  format: html
 "#;
     fs::write(config, contents)?;
     Ok(())

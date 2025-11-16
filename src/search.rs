@@ -124,6 +124,24 @@ impl Searcher {
         Ok(())
     }
 
+    /// Rebuild the index only when the provided fingerprint differs from the cached value.
+    pub async fn ensure_index(&self, fingerprint: Option<&str>) -> eyre::Result<bool> {
+        if let Some(expected) = fingerprint {
+            let path = self.fingerprint_path();
+            if let Ok(current) = fs::read_to_string(&path).await {
+                if current.trim() == expected {
+                    return Ok(false);
+                }
+            }
+            self.index().await?;
+            write(&path, expected.as_bytes()).await?;
+            return Ok(true);
+        }
+
+        self.index().await?;
+        Ok(true)
+    }
+
     /// Search for a query string, returning fuzzy matches.
     pub async fn search(&self, query: &str, limit: usize) -> eyre::Result<Vec<SearchHit>> {
         if query.trim().is_empty() {
@@ -169,11 +187,23 @@ impl Searcher {
     }
 
     fn tokenize(input: &str) -> Vec<String> {
-        input
+        let mut tokens: Vec<String> = input
             .unicode_words()
             .filter(|token| !token.trim().is_empty())
             .map(|token| token.to_string())
-            .collect()
+            .collect();
+
+        if tokens.is_empty() || tokens.iter().all(|tok| tok.chars().count() <= 2) {
+            tokens = input
+                .graphemes(true)
+                .filter(|g| !g.trim().is_empty())
+                .map(|g| g.to_string())
+                .collect();
+        }
+
+        tokens.sort();
+        tokens.dedup();
+        tokens
     }
 
     /// Emit a WASM-friendly JSON payload containing article metadata for client-side search fallback.
@@ -229,5 +259,12 @@ impl Searcher {
             .iter()
             .map(|byte| format!("\\{:02x}", byte))
             .collect::<String>()
+    }
+
+    fn fingerprint_path(&self) -> std::path::PathBuf {
+        self.workspace
+            .cache_dir()
+            .join("search_db")
+            .join("fingerprint.txt")
     }
 }

@@ -10,6 +10,7 @@ Node: `v24.10.0` with `hexo-cli 4.3.2`
 - Harness: `rust-script benchmark/run.rs`
 - Dataset: 10,000 synthetic Markdown articles, 12 paragraphs each, identical for both engines
 - Theme: `themes/zenflow` precompiled to `main.wasm`; Hexo theme in `benchmark/hexo-theme` mirrors Zenflow templates
+- Search: Thought emits `thought-search.{wasm,js}`; Hexo includes `hexo-generator-searchdb` generating `search.json`
 - Commands timed:
   - `thought generate` (workspace under `benchmark/workdir/thought-workspace`)
   - `hexo generate --silent` (workspace under `benchmark/workdir/hexo-workspace`)

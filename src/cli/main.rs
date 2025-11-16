@@ -10,7 +10,9 @@ use color_eyre::{
 use indicatif::{ProgressBar, ProgressStyle};
 use thought::{search::Searcher, workspace::Workspace};
 use tracing::{error, info, level_filters::LevelFilter};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
+};
 
 #[derive(Parser)]
 #[command(about = "Build your thoughts", long_about = None)]
@@ -75,9 +77,12 @@ async fn main() {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .without_time()
         .with_target(false);
-    let filter_layer = EnvFilter::builder()
+    let mut filter_layer = EnvFilter::builder()
         .with_default_directive(level.into())
         .from_env_lossy();
+    if let Ok(directive) = "tantivy=warn".parse::<Directive>() {
+        filter_layer = filter_layer.add_directive(directive);
+    }
 
     tracing_subscriber::registry()
         .with(filter_layer)
@@ -161,7 +166,7 @@ async fn run_search(workspace: &Workspace, query: &str, emit_json: bool) -> eyre
         .note("Failed to open search index")?;
     long_task(
         "Indexing articles for search...",
-        searcher.index(),
+        searcher.ensure_index(None),
         "Search index ready",
     )
     .await

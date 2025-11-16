@@ -70,3 +70,6 @@ You can archive prior runs by copying files from this folder.
   structure as Zenflow so layout costs are comparable.
 - Thought's WASM compilation is forced to happen ahead-of-time (outside
   timing) by baking the resulting `main.wasm` next to `Plugin.toml`.
+- Search indexing is enabled for both generators: Thought always bundles
+  `thought-search.{wasm,js}` while Hexo ships `hexo-generator-searchdb`
+  preconfigured in `_config.yml`.
