@@ -330,6 +330,10 @@ async fn ensure_category_metadata(
 }
 
 async fn ensure_root_category(workspace: &Workspace) -> std::io::Result<()> {
+    let metadata_path = workspace.articles_dir().join("Category.toml");
+    if async_fs::metadata(&metadata_path).await.is_ok() {
+        return Ok(());
+    }
     async_fs::create_dir_all(workspace.articles_dir()).await?;
     ensure_category_metadata(
         &workspace.articles_dir(),
