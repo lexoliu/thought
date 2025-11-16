@@ -117,6 +117,7 @@ impl Workspace {
         create_dir(root.join("articles")).await?;
 
         let workspace = Self::new(&root, manifest);
+        ensure_root_category(&workspace).await?;
 
         let _ = workspace.create_article("Hello,world", None).await?;
 

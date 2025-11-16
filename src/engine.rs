@@ -36,7 +36,8 @@ impl Engine {
         while let Some(article) = stream.try_next().await? {
             let plugins = self.plugins.clone();
             previews.push(article.preview().clone());
-            let article_output = output.join(article.segments().join("/"));
+            let relative_path = article.segments().join("/");
+            let article_output = output.join(format!("{relative_path}.html"));
 
             tasks.push(spawn(async move {
                 let rendered = plugins.render_article(article)?;

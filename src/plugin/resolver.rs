@@ -92,8 +92,6 @@ pub async fn resolve_plugin(
     fs::create_dir_all(&plugin_root).await?;
     let normalized_name = normalize_name(name);
     let plugin_dir = plugin_root.join(&normalized_name);
-    let client = Client::new();
-
     if fs::metadata(&plugin_dir).await.is_ok() {
         fs::remove_dir_all(&plugin_dir).await?;
     }
@@ -101,12 +99,14 @@ pub async fn resolve_plugin(
     // prepare plugin to be used within the workspace's cache directory
     let dir: PathBuf = match locator {
         PluginLocator::CratesIo { version } => {
+            let client = Client::new();
             download_crate(&client, name, version, &plugin_dir).await?;
             plugin_dir.clone()
         }
         PluginLocator::Git { url, rev } => {
             if let Some((author, repo)) = parse_github(url) {
                 let tag = rev.as_deref().unwrap_or("latest");
+                let client = Client::new();
                 if let Some(resolved) =
                     try_github_release(&client, &author, &repo, tag, &plugin_dir).await?
                 {
@@ -330,23 +330,29 @@ fn parse_github(url: &str) -> Option<(String, String)> {
 }
 
 async fn run_component_build(dir: &Path) -> color_eyre::eyre::Result<()> {
-    // Check the cargo-component is installed
-    if Command::new("cargo")
-        .arg("component")
-        .arg("--version")
+    // Check if `wasm32-wasip2` target is installed
+    let target_list_output = Command::new("rustup")
+        .arg("target")
+        .arg("list")
+        .arg("--installed")
         .output()
-        .await
-        .is_err()
+        .await?;
+    let installed_targets = String::from_utf8_lossy(&target_list_output.stdout);
+    if !installed_targets
+        .lines()
+        .any(|line| line.trim() == "wasm32-wasip2")
     {
         bail!(
-            "cargo-component is not installed. Please install it via `cargo install cargo-component`"
+            "The target `wasm32-wasip2` is not installed. Please run `rustup target add wasm32-wasip2` to install it."
         );
     }
 
     let status = Command::new("cargo")
-        .arg("component")
         .arg("build")
         .arg("--release")
+        // DO NOT use `cargo component build`, use standard cargo build, it has already built-in support for wasm32-wasip2 target
+        .arg("--target")
+        .arg("wasm32-wasip2")
         // use Cargo.toml in the plugin directory
         .arg("--manifest-path")
         .arg(dir.join("Cargo.toml"))
