@@ -1,0 +1,8 @@
+workdir/
+cache/
+results/
+
+# Node / Hexo noise
+node_modules/
+npm-debug.log
+yarn-error.log

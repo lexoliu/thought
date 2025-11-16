@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Index</title>
+  </head>
+  <body>
+    <header>
+      <h1>Blog Index</h1>
+    </header>
+    <main>
+      <ul>
+        <% const collection = (page.posts && page.posts.each) ? page.posts : site.posts; %>
+        <% collection.sort('date', -1).each(function(post) { %>
+        <li><a href="<%= url_for(post.path) %>"><%= post.title %></a></li>
+        <% }); %>
+      </ul>
+    </main>
+  </body>
+</html>
