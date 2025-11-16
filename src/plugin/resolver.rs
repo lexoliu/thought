@@ -6,12 +6,12 @@ use std::{
 use color_eyre::eyre::{bail, eyre};
 use flate2::read::GzDecoder;
 use git2::Repository;
-use reqwest::Client;
 use serde_json::Value;
 use tar::Archive;
 use thiserror::Error;
 use tokio::{fs, process::Command, task};
 use url::Url;
+use zenwave::{Client, Error as HttpError, ResponseExt, StatusCode};
 
 use crate::{
     metadata::{FailToOpenMetadata, MetadataExt, PluginLocator, PluginManifest},
@@ -77,7 +77,7 @@ pub enum ResolvePluginError {
     #[error("I/O error while preparing plugin: {0}")]
     Io(#[from] io::Error),
     #[error("Network error while downloading plugin: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[from] zenwave::Error),
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
 }
@@ -99,16 +99,13 @@ pub async fn resolve_plugin(
     // prepare plugin to be used within the workspace's cache directory
     let dir: PathBuf = match locator {
         PluginLocator::CratesIo { version } => {
-            let client = Client::new();
-            download_crate(&client, name, version, &plugin_dir).await?;
+            download_crate(name, version, &plugin_dir).await?;
             plugin_dir.clone()
         }
         PluginLocator::Git { url, rev } => {
             if let Some((author, repo)) = parse_github(url) {
                 let tag = rev.as_deref().unwrap_or("latest");
-                let client = Client::new();
-                if let Some(resolved) =
-                    try_github_release(&client, &author, &repo, tag, &plugin_dir).await?
+                if let Some(resolved) = try_github_release(&author, &repo, tag, &plugin_dir).await?
                 {
                     resolved
                 } else {
@@ -137,27 +134,26 @@ pub async fn resolve_plugin(
 }
 
 async fn try_github_release(
-    client: &Client,
     author: &str,
     repo: &str,
     tag: &str,
     target: &Path,
 ) -> Result<Option<PathBuf>, ResolvePluginError> {
+    let mut client = zenwave::client();
     let api_url = if tag == "latest" {
         format!("https://api.github.com/repos/{author}/{repo}/releases/latest")
     } else {
         format!("https://api.github.com/repos/{author}/{repo}/releases/tags/{tag}")
     };
-    let response = client
-        .get(api_url)
-        .header("User-Agent", "thought")
-        .send()
-        .await?;
-    if !response.status().is_success() {
+    let response = client.get(api_url).header("User-Agent", "thought").await?;
+    if response.status() == StatusCode::NOT_FOUND || !response.status().is_success() {
         return Ok(None);
     }
 
-    let payload: Value = response.json().await?;
+    let payload: Value = response
+        .into_json()
+        .await
+        .map_err(|err| HttpError::new(err, StatusCode::BAD_REQUEST))?;
     let Some(assets) = payload["assets"].as_array() else {
         return Ok(None);
     };
@@ -173,19 +169,17 @@ async fn try_github_release(
         let bytes = client
             .get(download_url)
             .header("User-Agent", "thought")
-            .send()
-            .await?
             .bytes()
             .await?;
 
         fs::create_dir_all(target).await?;
         if name.ends_with(".wasm") {
             let wasm_path = target.join("main.wasm");
-            fs::write(&wasm_path, &bytes).await?;
+            fs::write(&wasm_path, bytes.as_ref()).await?;
             return Ok(Some(target.to_path_buf()));
         }
         if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-            unpack_tarball(&bytes, target).await?;
+            unpack_tarball(bytes.as_ref(), target).await?;
             flatten_directory(target).await?;
             return Ok(Some(target.to_path_buf()));
         }
@@ -230,20 +224,19 @@ fn copy_dir_recursive_sync(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 async fn download_crate(
-    client: &Client,
     name: &str,
     version: &str,
     target: &Path,
 ) -> Result<(), ResolvePluginError> {
+    let mut client = zenwave::client();
     let url = format!("https://crates.io/api/v1/crates/{name}/{version}/download");
-    let response = client
+    let bytes = client
         .get(url)
         .header("User-Agent", "thought")
-        .send()
+        .bytes()
         .await?;
-    let bytes = response.bytes().await?;
     fs::create_dir_all(target).await?;
-    unpack_tarball(&bytes, target).await?;
+    unpack_tarball(bytes.as_ref(), target).await?;
     flatten_directory(target).await?;
     Ok(())
 }
