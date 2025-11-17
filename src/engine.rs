@@ -6,11 +6,8 @@ use sha2::{Digest, Sha256};
 use tokio::{fs as async_fs, spawn, sync::Mutex, task::JoinHandle};
 
 use crate::{
-    cache::RenderCache, plugin::PluginManager, search::Searcher, utils::write, workspace::Workspace,
+    cache::RenderCache, plugin::PluginManager, search, utils::write, workspace::Workspace,
 };
-use thought_plugin::helpers::{search_asset_dir, search_js_filename, search_wasm_filename};
-
-const SEARCH_WRAPPER: &str = include_str!("../assets/thought-search.js");
 
 pub struct Engine {
     workspace: Workspace,
@@ -91,25 +88,8 @@ impl Engine {
 
         cache.lock().await.persist().await?;
         let fingerprint = format!("{:x}", fingerprint.finalize());
-        self.emit_search_bundle(output, &fingerprint).await?;
+        search::emit_search_bundle(&self.workspace, output, Some(&fingerprint)).await?;
 
-        Ok(())
-    }
-}
-
-impl Engine {
-    async fn emit_search_bundle(&self, output: &Path, fingerprint: &str) -> eyre::Result<()> {
-        let searcher = Searcher::open(self.workspace.clone()).await?;
-        searcher.ensure_index(Some(fingerprint)).await?;
-
-        let asset_dir = output.join(search_asset_dir());
-        async_fs::create_dir_all(&asset_dir).await?;
-
-        let wasm_path = asset_dir.join(search_wasm_filename());
-        searcher.build_wasm(&wasm_path).await?;
-
-        let js_path = asset_dir.join(search_js_filename());
-        write(js_path, SEARCH_WRAPPER.as_bytes()).await?;
         Ok(())
     }
 }

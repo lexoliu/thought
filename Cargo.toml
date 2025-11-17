@@ -38,6 +38,8 @@ tracing-error = "0.2.1"
 tantivy = "0.25.0"
 redb.workspace = true
 rayon = "1.10.0"
+skyzen = { git = "https://github.com/zen-rs/skyzen" }
+mime_guess = "2.0"
 
 
 [workspace]

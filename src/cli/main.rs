@@ -8,7 +8,7 @@ use color_eyre::{
     eyre::{self},
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use thought::{search::Searcher, workspace::Workspace};
+use thought::{search::Searcher, serve, workspace::Workspace};
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_subscriber::{
     EnvFilter, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
@@ -45,6 +45,16 @@ enum Commands {
     /// Search indexed articles with fuzzy, multilingual matching.
     Search {
         query: String,
+    },
+
+    /// Serve the workspace locally with lazy compilation.
+    Serve {
+        /// Host address to bind (default 127.0.0.1)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 8787)]
+        port: u16,
     },
 }
 
@@ -132,6 +142,10 @@ async fn entry(cli: Cli) -> eyre::Result<()> {
                 }
                 Commands::Search { query } => {
                     run_search(&workspace, &query, cli.json).await?;
+                    Ok(())
+                }
+                Commands::Serve { host, port } => {
+                    serve::serve(workspace.clone(), host, port).await?;
                     Ok(())
                 }
                 _ => unreachable!(),

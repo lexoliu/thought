@@ -5,8 +5,8 @@ use std::{
 
 use color_eyre::eyre::{self, eyre};
 use futures::TryStreamExt;
-use redb::{Database, ReadableDatabase, TableDefinition};
 use rayon::prelude::*;
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::Serialize;
 use serde_json::json;
 use tantivy::{
@@ -25,6 +25,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use wat::parse_str;
 
 use crate::{article::Article, utils::write, workspace::Workspace};
+use thought_plugin::helpers::{search_asset_dir, search_js_filename, search_wasm_filename};
+
+pub(crate) const SEARCH_WRAPPER: &str = include_str!("../assets/thought-search.js");
 
 const TOKENIZER: &str = "thought_tokenizer";
 const SEARCH_META_TABLE: TableDefinition<&str, &str> = TableDefinition::new("search_meta");
@@ -153,7 +156,8 @@ impl Searcher {
             let _ = writer.add_document(document);
         });
 
-        let mut writer = Arc::try_unwrap(writer).map_err(|_| eyre!("search writer still in use"))?;
+        let mut writer =
+            Arc::try_unwrap(writer).map_err(|_| eyre!("search writer still in use"))?;
         writer.commit()?;
         Ok(())
     }
@@ -318,6 +322,25 @@ impl Searcher {
         })
         .await?
     }
+}
+
+pub async fn emit_search_bundle(
+    workspace: &Workspace,
+    output: &Path,
+    fingerprint: Option<&str>,
+) -> eyre::Result<()> {
+    let searcher = Searcher::open(workspace.clone()).await?;
+    searcher.ensure_index(fingerprint).await?;
+
+    let asset_dir = output.join(search_asset_dir());
+    fs::create_dir_all(&asset_dir).await?;
+
+    let wasm_path = asset_dir.join(search_wasm_filename());
+    searcher.build_wasm(&wasm_path).await?;
+
+    let js_path = asset_dir.join(search_js_filename());
+    write(js_path, SEARCH_WRAPPER.as_bytes()).await?;
+    Ok(())
 }
 
 async fn open_meta_database(path: PathBuf) -> eyre::Result<Arc<Database>> {
