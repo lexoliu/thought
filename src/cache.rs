@@ -1,11 +1,14 @@
-use std::{collections::HashMap, io::ErrorKind, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use bincode::{self};
 use color_eyre::eyre;
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::task::spawn_blocking;
 
 use crate::{article::Article, metadata::ArticleMetadata};
+
+const CACHE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("render_cache");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedArticle {
@@ -38,19 +41,15 @@ impl CachedArticle {
 #[derive(Debug)]
 pub struct RenderCache {
     entries: HashMap<String, CachedArticle>,
-    path: PathBuf,
+    db: Arc<Database>,
 }
 
 impl RenderCache {
     pub async fn load(path: PathBuf) -> eyre::Result<Self> {
-        let entries = match fs::read(&path).await {
-            Ok(bytes) => {
-                bincode::deserialize::<HashMap<String, CachedArticle>>(&bytes).unwrap_or_default()
-            }
-            Err(err) if err.kind() == ErrorKind::NotFound => HashMap::new(),
-            Err(err) => return Err(err.into()),
-        };
-        Ok(Self { entries, path })
+        let db = open_database(path).await?;
+        ensure_cache_table(&db).await?;
+        let entries = load_cache_entries(&db).await?;
+        Ok(Self { entries, db })
     }
 
     pub fn hit(&self, article: &Article) -> Option<String> {
@@ -67,15 +66,68 @@ impl RenderCache {
     }
 
     pub async fn persist(&self) -> eyre::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        let bytes = bincode::serialize(&self.entries)?;
-        fs::write(&self.path, bytes).await?;
+        let entries = self.entries.clone();
+        let db = Arc::clone(&self.db);
+        spawn_blocking(move || -> eyre::Result<()> {
+            let txn = db.begin_write()?;
+            let _ = txn.delete_table(CACHE_TABLE);
+            {
+                let mut table = txn.open_table(CACHE_TABLE)?;
+                for (key, entry) in entries {
+                    let bytes = bincode::serialize(&entry)?;
+                    table.insert(key.as_str(), bytes.as_slice())?;
+                }
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .await??;
         Ok(())
     }
 
     fn article_key(article: &Article) -> String {
         article.segments().join("/")
     }
+}
+
+async fn open_database(path: PathBuf) -> eyre::Result<Arc<Database>> {
+    spawn_blocking(move || -> eyre::Result<Arc<Database>> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let db = if path.exists() {
+            Database::open(path.as_path())?
+        } else {
+            Database::create(path.as_path())?
+        };
+        Ok(Arc::new(db))
+    })
+    .await?
+}
+
+async fn ensure_cache_table(db: &Arc<Database>) -> eyre::Result<()> {
+    let db = Arc::clone(db);
+    spawn_blocking(move || -> eyre::Result<()> {
+        let txn = db.begin_write()?;
+        txn.open_table(CACHE_TABLE)?;
+        txn.commit()?;
+        Ok(())
+    })
+    .await?
+}
+
+async fn load_cache_entries(db: &Arc<Database>) -> eyre::Result<HashMap<String, CachedArticle>> {
+    let db = Arc::clone(db);
+    spawn_blocking(move || -> eyre::Result<HashMap<String, CachedArticle>> {
+        let txn = db.begin_read()?;
+        let table = txn.open_table(CACHE_TABLE)?;
+        let mut entries = HashMap::new();
+        for item in table.iter()? {
+            let (key, value) = item?;
+            let cached: CachedArticle = bincode::deserialize(value.value())?;
+            entries.insert(key.value().to_string(), cached);
+        }
+        Ok(entries)
+    })
+    .await?
 }

@@ -33,7 +33,7 @@ impl Engine {
         }
 
         async_fs::create_dir_all(self.workspace.cache_dir()).await?;
-        let cache_path = self.workspace.cache_dir().join("render-cache.bin");
+        let cache_path = self.workspace.cache_dir().join("cache.redb");
         let cache = RenderCache::load(cache_path).await?;
         let cache = Arc::new(Mutex::new(cache));
 

@@ -36,6 +36,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["json","env-filter"]}
 tracing-error = "0.2.1"
 tantivy = "0.25.0"
+redb.workspace = true
 
 
 [workspace]
@@ -59,6 +60,7 @@ anyhow = "1.0.100"
 whoami = "1.6.1"
 flate2 = "1.1.5"
 tar = "0.4.44"
+redb = "3.0.2"
 
 [workspace.lints]
 rust.missing_docs = "warn"

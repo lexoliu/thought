@@ -1,7 +1,11 @@
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use color_eyre::eyre::{self, eyre};
 use futures::TryStreamExt;
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::Serialize;
 use serde_json::json;
 use tantivy::{
@@ -15,13 +19,14 @@ use tantivy::{
     },
     tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer},
 };
-use tokio::fs;
+use tokio::{fs, task::spawn_blocking};
 use unicode_segmentation::UnicodeSegmentation;
 use wat::parse_str;
 
 use crate::{article::Article, utils::write, workspace::Workspace};
 
 const TOKENIZER: &str = "thought_tokenizer";
+const SEARCH_META_TABLE: TableDefinition<&str, &str> = TableDefinition::new("search_meta");
 const INDEX_WRITER_MEMORY: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +51,7 @@ impl From<Article> for SearchHit {
 pub struct Searcher {
     workspace: Workspace,
     index: Index,
+    meta_db: Arc<Database>,
     title_field: Field,
     content_field: Field,
     path_field: Field,
@@ -78,9 +84,14 @@ impl Searcher {
         let content_field = schema.get_field("content").map_err(|err| eyre!(err))?;
         let path_field = schema.get_field("path").map_err(|err| eyre!(err))?;
 
+        let meta_db_path = workspace.cache_dir().join("search_index.redb");
+        let meta_db = open_meta_database(meta_db_path).await?;
+        ensure_meta_table(&meta_db).await?;
+
         Ok(Self {
             workspace,
             index,
+            meta_db,
             title_field,
             content_field,
             path_field,
@@ -128,14 +139,13 @@ impl Searcher {
     /// Rebuild the index only when the provided fingerprint differs from the cached value.
     pub async fn ensure_index(&self, fingerprint: Option<&str>) -> eyre::Result<bool> {
         if let Some(expected) = fingerprint {
-            let path = self.fingerprint_path();
-            if let Ok(current) = fs::read_to_string(&path).await {
-                if current.trim() == expected {
+            if let Some(current) = self.read_fingerprint().await? {
+                if current == expected {
                     return Ok(false);
                 }
             }
             self.index().await?;
-            write(&path, expected.as_bytes()).await?;
+            self.write_fingerprint(expected).await?;
             return Ok(true);
         }
 
@@ -261,11 +271,55 @@ impl Searcher {
             .map(|byte| format!("\\{:02x}", byte))
             .collect::<String>()
     }
-
-    fn fingerprint_path(&self) -> std::path::PathBuf {
-        self.workspace
-            .cache_dir()
-            .join("search_db")
-            .join("fingerprint.txt")
+    async fn read_fingerprint(&self) -> eyre::Result<Option<String>> {
+        let db = Arc::clone(&self.meta_db);
+        spawn_blocking(move || -> eyre::Result<Option<String>> {
+            let txn = db.begin_read()?;
+            let table = txn.open_table(SEARCH_META_TABLE)?;
+            let value = table.get("fingerprint")?;
+            Ok(value.map(|guard| guard.value().to_string()))
+        })
+        .await?
     }
+
+    async fn write_fingerprint(&self, fingerprint: &str) -> eyre::Result<()> {
+        let db = Arc::clone(&self.meta_db);
+        let fingerprint = fingerprint.to_string();
+        spawn_blocking(move || -> eyre::Result<()> {
+            let txn = db.begin_write()?;
+            {
+                let mut table = txn.open_table(SEARCH_META_TABLE)?;
+                table.insert("fingerprint", fingerprint.as_str())?;
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .await?
+    }
+}
+
+async fn open_meta_database(path: PathBuf) -> eyre::Result<Arc<Database>> {
+    spawn_blocking(move || -> eyre::Result<Arc<Database>> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let db = if path.exists() {
+            Database::open(path.as_path())?
+        } else {
+            Database::create(path.as_path())?
+        };
+        Ok(Arc::new(db))
+    })
+    .await?
+}
+
+async fn ensure_meta_table(db: &Arc<Database>) -> eyre::Result<()> {
+    let db = Arc::clone(db);
+    spawn_blocking(move || -> eyre::Result<()> {
+        let txn = db.begin_write()?;
+        txn.open_table(SEARCH_META_TABLE)?;
+        txn.commit()?;
+        Ok(())
+    })
+    .await?
 }
