@@ -22,6 +22,7 @@ use wat::parse_str;
 use crate::{article::Article, utils::write, workspace::Workspace};
 
 const TOKENIZER: &str = "thought_tokenizer";
+const INDEX_WRITER_MEMORY: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
@@ -106,7 +107,7 @@ impl Searcher {
 
     /// Rebuild the search index from scratch.
     pub async fn index(&self) -> eyre::Result<()> {
-        let mut writer: IndexWriter = self.index.writer(50_000_000)?;
+        let mut writer: IndexWriter = self.index.writer(INDEX_WRITER_MEMORY)?;
         writer.delete_all_documents()?;
 
         let stream = self.workspace.articles();

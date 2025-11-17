@@ -57,7 +57,7 @@ enum ArticleCommands {
     },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     HookBuilder::default()
         .display_env_section(true)
