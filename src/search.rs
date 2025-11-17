@@ -6,10 +6,11 @@ use std::{
 use color_eyre::eyre::{self, eyre};
 use futures::TryStreamExt;
 use redb::{Database, ReadableDatabase, TableDefinition};
+use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::json;
 use tantivy::{
-    Index, IndexWriter, Term,
+    Index, Term,
     collector::TopDocs,
     doc,
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser},
@@ -55,6 +56,12 @@ pub struct Searcher {
     title_field: Field,
     content_field: Field,
     path_field: Field,
+}
+
+struct IndexedDoc {
+    title: String,
+    content: String,
+    path: String,
 }
 
 impl Searcher {
@@ -118,20 +125,35 @@ impl Searcher {
 
     /// Rebuild the search index from scratch.
     pub async fn index(&self) -> eyre::Result<()> {
-        let mut writer: IndexWriter = self.index.writer(INDEX_WRITER_MEMORY)?;
+        let writer = self.index.writer(INDEX_WRITER_MEMORY)?;
         writer.delete_all_documents()?;
 
+        let mut docs = Vec::new();
         let stream = self.workspace.articles();
         futures::pin_mut!(stream);
         while let Some(article) = stream.as_mut().try_next().await? {
-            let doc = doc!(
-                self.title_field => article.title().to_string(),
-                self.content_field => article.content().to_string(),
-                self.path_field => article.dir().to_string_lossy().to_string(),
-            );
-            writer.add_document(doc)?;
+            docs.push(IndexedDoc {
+                title: article.title().to_string(),
+                content: article.content().to_string(),
+                path: article.dir().to_string_lossy().to_string(),
+            });
         }
 
+        let writer = Arc::new(writer);
+        let title_field = self.title_field;
+        let content_field = self.content_field;
+        let path_field = self.path_field;
+
+        docs.par_iter().for_each(|entry| {
+            let document = doc!(
+                title_field => entry.title.as_str(),
+                content_field => entry.content.as_str(),
+                path_field => entry.path.as_str(),
+            );
+            let _ = writer.add_document(document);
+        });
+
+        let mut writer = Arc::try_unwrap(writer).map_err(|_| eyre!("search writer still in use"))?;
         writer.commit()?;
         Ok(())
     }
