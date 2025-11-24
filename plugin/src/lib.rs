@@ -525,15 +525,16 @@ pub mod helpers {
     /// Render a compact date string using a locale-aware pattern.
     #[must_use]
     pub fn format_display_date_locale(locale: &str, dt: OffsetDateTime) -> String {
+        let month_num: u8 = dt.month().into();
         match locale {
             l if l.starts_with("zh") => {
-                format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
+                format!("{:04}-{:02}-{:02}", dt.year(), month_num, dt.day())
             }
             l if l.starts_with("ja") => {
-                format!("{:04}年{:02}月{:02}日", dt.year(), dt.month(), dt.day())
+                format!("{:04}年{:02}月{:02}日", dt.year(), month_num, dt.day())
             }
             l if l.starts_with("ko") => {
-                format!("{:04}.{:02}.{:02}", dt.year(), dt.month(), dt.day())
+                format!("{:04}.{:02}.{:02}", dt.year(), month_num, dt.day())
             }
             _ => format_display_date(dt),
         }
