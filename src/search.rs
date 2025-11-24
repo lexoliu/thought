@@ -42,7 +42,7 @@ pub struct SearchHit {
 
 impl From<Article> for SearchHit {
     fn from(article: Article) -> Self {
-        let permalink = format!("{}.html", article.segments().join("/"));
+        let permalink = article.output_file();
         Self {
             title: article.title().to_string(),
             description: article.description().to_string(),
@@ -139,7 +139,7 @@ impl Searcher {
             docs.push(IndexedDoc {
                 title: article.title().to_string(),
                 content: article.content().to_string(),
-                path: article.dir().to_string_lossy().to_string(),
+                path: article.output_file(),
             });
         }
 

@@ -18,6 +18,7 @@ struct ArticleTemplate<'a> {
     author: &'a str,
     search_js: &'a str,
     asset_prefix: &'a str,
+    translations: &'a [LangOption],
 }
 
 #[derive(Template)]
@@ -33,16 +34,32 @@ struct IndexEntry {
     href: String,
 }
 
+struct LangOption {
+    locale: String,
+    href: String,
+    selected: bool,
+}
+
 impl Theme for Plugin {
     fn generate_page(article: Article) -> String {
         let created = format_rfc3339(article.metadata().created());
+        let translations = article
+            .translation_links()
+            .into_iter()
+            .map(|link| LangOption {
+                locale: link.locale.clone(),
+                href: link.href,
+                selected: link.locale == article.locale(),
+            })
+            .collect::<Vec<_>>();
         ArticleTemplate {
             title: article.title(),
             created: &created,
-            body: markdown_to_html(article.content()).as_str(),
+            body: article.content_html().as_str(),
             author: article.metadata().author(),
             search_js: &article.search_script_path(),
             asset_prefix: &article.assets_prefix(),
+            translations: translations.as_slice(),
         }
         .render()
         .expect("failed to render article template")

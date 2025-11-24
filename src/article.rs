@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use sha2::Digest;
@@ -25,6 +25,27 @@ pub struct ArticlePreview {
     pub(crate) category: Category,
     pub(crate) metadata: ArticleMetadata,
     pub(crate) description: String,
+    pub(crate) locale: String,
+    pub(crate) default_locale: String,
+    pub(crate) translations: Vec<ArticleTranslation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArticleTranslation {
+    pub(crate) locale: String,
+    pub(crate) title: String,
+}
+
+impl ArticleTranslation {
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        &self.locale
+    }
+
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
 }
 
 impl ArticlePreview {
@@ -51,6 +72,43 @@ impl ArticlePreview {
     pub fn description(&self) -> &str {
         &self.description
     }
+
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        &self.locale
+    }
+
+    #[must_use]
+    pub fn default_locale(&self) -> &str {
+        &self.default_locale
+    }
+
+    #[must_use]
+    pub fn is_default_locale(&self) -> bool {
+        self.locale == self.default_locale
+    }
+
+    #[must_use]
+    pub fn translations(&self) -> &[ArticleTranslation] {
+        &self.translations
+    }
+
+    #[must_use]
+    pub fn output_path(&self) -> String {
+        let mut path = self.category().segments().to_vec();
+        let mut slug = self.slug().to_string();
+        if !self.is_default_locale() {
+            slug.push('.');
+            slug.push_str(self.locale());
+        }
+        path.push(slug);
+        path.join("/")
+    }
+
+    #[must_use]
+    pub fn output_file(&self) -> String {
+        format!("{}.html", self.output_path())
+    }
 }
 
 impl Article {
@@ -63,14 +121,28 @@ impl Article {
         description: impl Into<String>,
         content: impl Into<String>,
     ) -> Self {
+        let default_locale = metadata
+            .lang()
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "en".to_string());
+        let title = title.into();
+        let slug = slug.into();
+        let description = description.into();
+        let translations = vec![ArticleTranslation {
+            locale: default_locale.clone(),
+            title: title.clone(),
+        }];
         Self {
             content: content.into(),
             preview: ArticlePreview {
-                title: title.into(),
-                slug: slug.into(),
+                title,
+                slug,
                 category,
                 metadata,
-                description: description.into(),
+                description,
+                locale: default_locale.clone(),
+                default_locale,
+                translations,
             },
         }
     }
@@ -87,25 +159,45 @@ impl Article {
         workspace: Workspace,
         segments: impl Into<Vec<String>>,
     ) -> Result<Self, FailToOpenArticle> {
+        Self::open_with_locale(workspace, segments, None).await
+    }
+
+    /// Open an article for a specific locale. If `locale` is `None`, the default locale is used.
+    pub async fn open_with_locale(
+        workspace: Workspace,
+        segments: impl Into<Vec<String>>,
+        locale: Option<String>,
+    ) -> Result<Self, FailToOpenArticle> {
         let segments = segments.into();
         let path_buf = workspace.articles_dir();
         let full_path = segments.iter().fold(path_buf, |acc, comp| acc.join(comp));
         let category_path = full_path
             .parent()
             .ok_or(FailToOpenArticle::ArticleNotFound)?;
-        let metadata_path = full_path.join("Article.toml");
-        let content_path = full_path.join("article.md");
 
         // check if the article directory exists
         if !full_path.exists() || !full_path.is_dir() {
             return Err(FailToOpenArticle::ArticleNotFound);
         }
 
+        let metadata_path = full_path.join("Article.toml");
         let metadata = ArticleMetadata::open(metadata_path)
             .await
             .map_err(FailToOpenArticle::FailToOpenMetadata)?;
+        let default_locale = metadata
+            .lang()
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "en".to_string());
 
-        let content = read_to_string(content_path)
+        let available = enumerate_locales(&full_path, &default_locale).await?;
+        let target_locale = locale.unwrap_or_else(|| default_locale.clone());
+        let content_path = locale_to_path(&full_path, &target_locale, &default_locale);
+
+        if !content_path.exists() {
+            return Err(FailToOpenArticle::ArticleNotFound);
+        }
+
+        let content = read_to_string(&content_path)
             .await
             .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
 
@@ -119,24 +211,34 @@ impl Article {
             .map_err(|_| FailToOpenArticle::WorkspaceNotFound)?;
 
         let extraction = extract(&content);
+        let title = extraction.title.unwrap_or_else(|| {
+            let format =
+                format_description!("[weekday repr:short] [day padding:none] [month repr:short]");
+            metadata
+                .created()
+                .format(format)
+                .expect("Failed to format date")
+        });
+
+        let translations = available
+            .iter()
+            .map(|variant| ArticleTranslation {
+                locale: variant.locale.clone(),
+                title: variant.title.clone().unwrap_or_else(|| title.clone()),
+            })
+            .collect::<Vec<_>>();
 
         Ok(Self {
             content: extraction.content.to_string(),
             preview: ArticlePreview {
-                title: extraction.title.unwrap_or_else(|| {
-                    // use date of created as title
-                    let format = format_description!(
-                        "[weekday repr:short] [day padding:none] [month repr:short]"
-                    );
-                    metadata
-                        .created()
-                        .format(format)
-                        .expect("Failed to format date")
-                }),
+                title,
                 slug,
                 category,
                 metadata,
                 description: extraction.description,
+                locale: target_locale,
+                default_locale,
+                translations,
             },
         })
     }
@@ -187,6 +289,36 @@ impl Article {
         &self.preview.metadata
     }
 
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        self.preview.locale()
+    }
+
+    #[must_use]
+    pub fn default_locale(&self) -> &str {
+        self.preview.default_locale()
+    }
+
+    #[must_use]
+    pub fn is_default_locale(&self) -> bool {
+        self.preview.is_default_locale()
+    }
+
+    #[must_use]
+    pub fn translations(&self) -> &[ArticleTranslation] {
+        self.preview.translations()
+    }
+
+    #[must_use]
+    pub fn output_path(&self) -> String {
+        self.preview.output_path()
+    }
+
+    #[must_use]
+    pub fn output_file(&self) -> String {
+        self.preview.output_file()
+    }
+
     /// Calculate the SHA256 hash of the article
     /// This can be used to uniquely identify the article content
     #[allow(clippy::missing_panics_doc)]
@@ -198,6 +330,7 @@ impl Article {
             "title": self.title(),
             "slug": self.slug(),
             "category": self.category().dir(),
+            "locale": self.locale(),
             "metadata": {
                 "created": self.metadata().created().unix_timestamp(),
                 "tags": self.metadata().tags(),
@@ -284,4 +417,71 @@ fn extract(input: &str) -> ExtractionResult<'_> {
         description,
         content: input,
     }
+}
+
+#[derive(Debug, Clone)]
+struct LocaleVariant {
+    locale: String,
+    title: Option<String>,
+}
+
+fn parse_locale_from_filename(path: &Path, default_locale: &str) -> Option<String> {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+        return None;
+    }
+    match path.file_stem().and_then(|stem| stem.to_str()) {
+        Some("article") => Some(default_locale.to_string()),
+        Some(stem) if !stem.is_empty() => Some(stem.to_string()),
+        _ => None,
+    }
+}
+
+async fn enumerate_locales(
+    dir: &Path,
+    default_locale: &str,
+) -> Result<Vec<LocaleVariant>, FailToOpenArticle> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
+    let mut variants = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|_| FailToOpenArticle::ArticleNotFound)?
+    {
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .await
+            .map_err(|_| FailToOpenArticle::ArticleNotFound)?
+            .is_file()
+        {
+            continue;
+        }
+
+        let Some(locale) = parse_locale_from_filename(&path, default_locale) else {
+            continue;
+        };
+        let content = read_to_string(&path)
+            .await
+            .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
+        let extraction = extract(&content);
+        variants.push(LocaleVariant {
+            locale,
+            title: extraction.title.map(|s| s.to_string()),
+        });
+    }
+
+    if variants.is_empty() {
+        Err(FailToOpenArticle::ArticleNotFound)
+    } else {
+        Ok(variants)
+    }
+}
+
+fn locale_to_path(dir: &Path, locale: &str, default_locale: &str) -> PathBuf {
+    if locale == default_locale {
+        return dir.join("article.md");
+    }
+    dir.join(format!("{locale}.md"))
 }

@@ -41,6 +41,7 @@ rayon = "1.10.0"
 skyzen = { git = "https://github.com/zen-rs/skyzen" }
 mime_guess = "2.0"
 zip = "0.6"
+aither = { git = "https://github.com/lexoliu/aither", default-features = true, features = ["openai"], optional = true }
 
 
 [workspace]
@@ -87,4 +88,4 @@ required-features = ["cli"]
 
 [features]
 default = ["cli"]
-cli = ["dep:indicatif","dep:clap","dep:color-eyre"]
+cli = ["dep:indicatif","dep:clap","dep:color-eyre","dep:aither"]

@@ -47,6 +47,8 @@ pub struct ArticleMetadata {
     pub(crate) tags: Vec<String>,
     pub(crate) author: String,
     pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) lang: Option<String>,
 }
 
 impl ArticleMetadata {
@@ -57,6 +59,7 @@ impl ArticleMetadata {
             author: author.into(),
             tags: Vec::new(),
             description: None,
+            lang: None,
         }
     }
 
@@ -102,6 +105,17 @@ impl ArticleMetadata {
     pub fn add_tag(&mut self, tag: impl Into<String>) {
         self.tags.push(tag.into());
     }
+
+    /// Preferred language code for this article (e.g. "en", "zh-CN").
+    #[must_use]
+    pub fn lang(&self) -> Option<&str> {
+        self.lang.as_deref()
+    }
+
+    /// Set the preferred language for the base article content.
+    pub fn set_lang(&mut self, lang: impl Into<String>) {
+        self.lang = Some(lang.into());
+    }
 }
 
 impl CategoryMetadata {
@@ -146,6 +160,8 @@ pub struct WorkspaceManifest {
     description: String,
     owner: String,
     plugins: PluginRegistry,
+    #[serde(default)]
+    translation: Option<TranslationConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +202,51 @@ pub struct PluginEntry {
     name: String,
     #[serde(flatten)]
     locator: PluginLocator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranslationConfig {
+    /// Model identifiers to try with OpenRouter (fall back in order).
+    pub models: Vec<String>,
+    /// Backward compat: single model field maps into `models`.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Maximum number of concurrent translation requests.
+    pub max_concurrency: usize,
+    /// Number of times to retry a failed translation.
+    pub max_retries: usize,
+}
+
+impl Default for TranslationConfig {
+    fn default() -> Self {
+        Self {
+            models: default_models(),
+            model: None,
+            max_concurrency: 4,
+            max_retries: 2,
+        }
+    }
+}
+
+fn default_models() -> Vec<String> {
+    vec![
+        "gpt-4o-mini".to_string(),
+        "deepseek/deepseek-chat".to_string(),
+    ]
+}
+
+impl TranslationConfig {
+    #[must_use]
+    pub fn effective_models(&self) -> Vec<String> {
+        if !self.models.is_empty() {
+            return self.models.clone();
+        }
+        if let Some(model) = &self.model {
+            return vec![model.clone()];
+        }
+        default_models()
+    }
 }
 
 impl PluginEntry {
@@ -250,12 +311,31 @@ impl WorkspaceManifest {
             description: description.into(),
             owner: owner.into(),
             plugins,
+            translation: None,
         }
     }
 
     /// Set the owner of the workspace
     pub fn set_owner(&mut self, owner: impl Into<String>) {
         self.owner = owner.into();
+    }
+
+    #[must_use]
+    pub fn translation_config(&self) -> TranslationConfig {
+        self.translation
+            .clone()
+            .map(|cfg| {
+                if cfg.effective_models().is_empty() {
+                    TranslationConfig::default()
+                } else {
+                    cfg
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_translation_config(&mut self, config: TranslationConfig) {
+        self.translation = Some(config);
     }
 
     /// Get the name of the workspace

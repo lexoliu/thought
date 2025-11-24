@@ -86,7 +86,7 @@ impl RenderCache {
     }
 
     fn article_key(article: &Article) -> String {
-        article.segments().join("/")
+        article.output_path()
     }
 }
 

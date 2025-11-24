@@ -9,7 +9,48 @@
     <a href="{{ asset_prefix }}index.html">← Back</a>
     <h1>{{ title }}</h1>
     <p>By {{ author }} · {{ created }}</p>
+    {% if translations | length > 1 %}
+    <label>
+      Language:
+      <select id="lang-select">
+        {% for lang in translations %}
+        <option value="{{ lang.href }}" {% if lang.selected %}selected{% endif %}>{{ lang.locale }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <div style="position: relative; margin: 12px 0;">
+      <input id="search-input" type="search" placeholder="Search…" style="width: 100%; padding: 10px 90px 10px 10px;">
+      <button id="search-btn" style="position:absolute; right:8px; top:50%; transform: translateY(-50%);">Search</button>
+    </div>
+    <div id="search-results"></div>
     <div>{{ body | safe }}</div>
     <script src="{{ search_js }}" defer></script>
+    <script>
+      const input = document.getElementById('search-input');
+      const button = document.getElementById('search-btn');
+      const results = document.getElementById('search-results');
+      const langSelect = document.getElementById('lang-select');
+      function renderResults(hits) {
+        if (!hits || hits.length === 0) {
+          results.innerHTML = '';
+          return;
+        }
+        results.innerHTML = hits.map(hit => `<div><a href="${hit.permalink}">${hit.title}</a></div>`).join('');
+      }
+      async function runSearch() {
+        const query = input.value.trim();
+        if (!query) { results.innerHTML = ''; return; }
+        const res = await window.ThoughtSearch.search(query);
+        const hits = Array.isArray(res) ? res : (res && res.hits) ? res.hits : [];
+        renderResults(hits);
+      }
+      button?.addEventListener('click', runSearch);
+      input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+      langSelect?.addEventListener('change', (event) => {
+        const href = event.target.value;
+        if (href) { window.location.href = href; }
+      });
+    </script>
   </body>
 </html>

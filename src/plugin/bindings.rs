@@ -28,6 +28,7 @@ pub type WITArticlePreview = hook::thought::plugin::types::ArticlePreview;
 pub type WITCategory = hook::thought::plugin::types::Category;
 pub type WITArticleMetadata = hook::thought::plugin::types::ArticleMetadata;
 pub type WITCategoryMetadata = hook::thought::plugin::types::CategoryMetadata;
+pub type WITTranslation = hook::thought::plugin::types::Translation;
 impl From<Article> for WITArticle {
     fn from(article: Article) -> Self {
         WITArticle {
@@ -53,6 +54,7 @@ impl From<ArticleMetadata> for WITArticleMetadata {
             tags: metadata.tags,
             author: metadata.author,
             description: metadata.description,
+            lang: metadata.lang,
         }
     }
 }
@@ -65,6 +67,16 @@ impl From<ArticlePreview> for WITArticlePreview {
             category: article.category.into(),
             metadata: article.metadata.into(),
             description: article.description,
+            locale: article.locale,
+            default_locale: article.default_locale,
+            translations: article
+                .translations
+                .into_iter()
+                .map(|t| WITTranslation {
+                    locale: t.locale,
+                    title: t.title,
+                })
+                .collect(),
         }
     }
 }

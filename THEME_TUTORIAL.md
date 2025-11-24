@@ -27,6 +27,38 @@ This creates a new directory `my-awesome-theme` with all the necessary files to 
 
 This scaffold is a fully functional theme. You can build and package it right away!
 
+### Multi-language content at a glance
+
+Thought now ships first-class multi-language support. Each article folder can contain:
+
+- `article.md` — your primary language (default locale falls back to `en` unless you set `lang` in `Article.toml`).
+- `zh-CN.md`, `ja.md`, `ko.md`, ... — additional locales sitting next to `article.md`.
+
+During rendering Thought produces one HTML file per locale. The `Article`/`ArticlePreview` types expose the language context so you can surface a language switcher:
+
+- `article.locale()` / `article.default_locale()` tell you which variant you're rendering.
+- `article.translations()` lists every available locale with its title.
+- `article.translation_links()` gives ready-to-use `{ locale, title, href }` values.
+- `article.output_file()` already bakes the locale suffix into the path (e.g., `hello.zh-CN.html`).
+- `article.metadata().created_display_for(locale)` formats the date using a locale-aware helper; `format_display_date_locale(locale, dt)` is available in `thought_plugin::helpers` for custom formatting.
+
+A minimal template snippet looks like:
+
+```html
+{% if translations.len() > 1 %}
+<label for="lang-select">Language</label>
+<select id="lang-select" onchange="location.href=this.value">
+  {% for lang in translations %}
+  <option value="{{ lang.href }}" {% if lang.locale == article.locale %}selected{% endif %}>
+    {{ lang.locale }}
+  </option>
+  {% endfor %}
+</select>
+{% endif %}
+```
+
+You don't need to calculate depth yourself: `article.assets_prefix()`, `article.assets_path("style.css")`, `article.search_script_path()`, and `article.search_wasm_path()` already resolve relative URLs correctly for every locale and nested category.
+
 ## Part 2: The `Theme` Trait and Your Logic
 
 Open up `src/lib.rs`. This is where you'll define how your site is rendered. The key component is the `Theme` trait, provided by the `thought-plugin` crate.

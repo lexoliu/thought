@@ -4,7 +4,9 @@ use clap::Subcommand;
 use color_eyre::eyre;
 use flate2::{Compression, write::GzEncoder};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tar::Builder;
+use thought::{plugin::PluginManager, workspace::Workspace};
 use tokio::{fs, process::Command};
 use toml::Value;
 use whoami;
@@ -25,6 +27,12 @@ pub enum PluginCommands {
         path: PathBuf,
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+
+    /// Re-fetch and rebuild a plugin declared in Thought.toml
+    Update {
+        /// Plugin name as declared in Thought.toml
+        name: String,
     },
 }
 
@@ -74,6 +82,10 @@ pub async fn handle_plugin_command(cmd: PluginCommands) -> eyre::Result<()> {
             plugin_package(&path, out.as_deref()).await?;
             Ok(())
         }
+        PluginCommands::Update { name } => {
+            plugin_update(&name).await?;
+            Ok(())
+        }
     }
 }
 
@@ -119,6 +131,88 @@ async fn plugin_create(name: &str, kind: &str, path: Option<&Path>) -> eyre::Res
     }
 
     Ok(())
+}
+
+async fn plugin_update(name: &str) -> eyre::Result<()> {
+    let workspace = Workspace::open(std::env::current_dir()?)
+        .await
+        .map_err(|_| eyre::eyre!("Not a Thought workspace (Thought.toml missing)"))?;
+
+    let locator_exists = workspace.manifest().plugins().any(|(n, _)| n == name);
+    if !locator_exists {
+        return Err(eyre::eyre!("Plugin `{name}` not found in Thought.toml"));
+    }
+
+    let plugin_dir = workspace
+        .cache_dir()
+        .join("plugins")
+        .join(normalize_name(name));
+    let had_cache = fs::metadata(&plugin_dir).await.is_ok();
+    let old_head = git_head(&plugin_dir).await;
+    let old_hash = wasm_hash(&plugin_dir).await;
+    if had_cache {
+        fs::remove_dir_all(&plugin_dir).await?;
+    }
+
+    // Re-resolve all plugins to ensure dependencies are up-to-date.
+    PluginManager::resolve_workspace(&workspace).await?;
+    let new_head = git_head(&plugin_dir).await;
+    let new_hash = wasm_hash(&plugin_dir).await;
+
+    if let (Some(old), Some(new)) = (old_head.as_ref(), new_head.as_ref()) {
+        if old != new {
+            println!("Plugin `{name}` updated: git {old} -> {new}");
+        } else {
+            eprintln!("Plugin `{name}` unchanged (git HEAD stays at {old}).");
+        }
+    } else if let (Some(old), Some(new)) = (old_hash.as_ref(), new_hash.as_ref()) {
+        if old != new {
+            println!("Plugin `{name}` updated: artifact hash changed.");
+        } else {
+            eprintln!("Plugin `{name}` unchanged (artifact hash identical).");
+        }
+    } else if had_cache {
+        println!("Plugin `{name}` refreshed.");
+    } else {
+        println!("Plugin `{name}` installed.");
+    }
+    Ok(())
+}
+
+fn normalize_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '-',
+            _ => ch,
+        })
+        .collect()
+}
+
+async fn wasm_hash(dir: &Path) -> Option<String> {
+    let path = dir.join("main.wasm");
+    let bytes = fs::read(&path).await.ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+async fn git_head(dir: &Path) -> Option<String> {
+    if !dir.join(".git").exists() {
+        return None;
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if head.is_empty() { None } else { Some(head) }
 }
 
 async fn plugin_package(path: &Path, out: Option<&Path>) -> eyre::Result<()> {

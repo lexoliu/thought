@@ -18,8 +18,10 @@ use tracing::{error, info, level_filters::LevelFilter};
 use tracing_subscriber::{
     EnvFilter, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
+use translate::run_translate;
 
 mod plugin;
+mod translate;
 
 #[derive(Parser)]
 #[command(about = "Build your thoughts", long_about = None)]
@@ -68,6 +70,12 @@ enum Commands {
     Plugin {
         #[command(subcommand)]
         command: PluginCommands,
+    },
+
+    /// Translate all articles into the given language code (uses OpenRouter).
+    Translate {
+        /// Target language code, e.g. zh-CN, ja, fr
+        language: String,
     },
 }
 
@@ -173,6 +181,10 @@ async fn entry(cli: Cli) -> eyre::Result<()> {
                         None => (2006, true),
                     };
                     serve::serve(workspace.clone(), host, port, allow_fallback).await?;
+                    Ok(())
+                }
+                Commands::Translate { language } => {
+                    run_translate(workspace.clone(), language).await?;
                     Ok(())
                 }
                 _ => unreachable!(),

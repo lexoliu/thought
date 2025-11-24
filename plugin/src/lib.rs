@@ -1,3 +1,4 @@
+pub use askama;
 pub use pulldown_cmark;
 pub mod types {
     wit_bindgen::generate!({
@@ -31,6 +32,14 @@ pub mod hook {
 pub use types::thought::plugin::types::*;
 
 pub use hook::export as export_hook;
+
+/// Convenience link for switching article translations.
+#[derive(Debug, Clone)]
+pub struct TranslationLink {
+    pub locale: String,
+    pub title: String,
+    pub href: String,
+}
 
 pub trait Theme {
     fn generate_page(article: Article) -> String;
@@ -105,6 +114,11 @@ impl ArticleMetadata {
     }
 
     #[must_use]
+    pub fn created_display_for(&self, locale: &str) -> String {
+        helpers::format_display_date_locale(locale, self.created())
+    }
+
+    #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
@@ -117,6 +131,11 @@ impl ArticleMetadata {
     #[must_use]
     pub fn author(&self) -> &str {
         self.author.as_str()
+    }
+
+    #[must_use]
+    pub fn language(&self) -> Option<&str> {
+        self.lang.as_ref().map(|s| s.as_str())
     }
 }
 
@@ -146,6 +165,26 @@ impl ArticlePreview {
         &self.category
     }
 
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        &self.locale
+    }
+
+    #[must_use]
+    pub fn default_locale(&self) -> &str {
+        &self.default_locale
+    }
+
+    #[must_use]
+    pub fn is_default_locale(&self) -> bool {
+        self.locale == self.default_locale
+    }
+
+    #[must_use]
+    pub fn translations(&self) -> &[Translation] {
+        &self.translations
+    }
+
     /// Prefix to the assets directory relative to this article preview.
     #[must_use]
     pub fn assets_prefix(&self) -> String {
@@ -171,7 +210,12 @@ impl ArticlePreview {
     #[must_use]
     pub fn output_path(&self) -> String {
         let mut path = self.category().path().to_vec();
-        path.push(self.slug().to_string());
+        let mut slug = self.slug().to_string();
+        if !self.is_default_locale() && !self.locale().is_empty() {
+            slug.push('.');
+            slug.push_str(self.locale());
+        }
+        path.push(slug);
         path.join("/")
     }
 
@@ -179,6 +223,35 @@ impl ArticlePreview {
     #[must_use]
     pub fn output_file(&self) -> String {
         format!("{}.html", self.output_path())
+    }
+
+    /// Build a relative output file name for a specific locale of this article.
+    #[must_use]
+    pub fn output_file_for_locale(&self, locale: &str) -> String {
+        if locale.is_empty() || locale == self.default_locale() {
+            return format!("{}.html", {
+                let mut path = self.category().path().to_vec();
+                path.push(self.slug().to_string());
+                path.join("/")
+            });
+        }
+        let mut path = self.category().path().to_vec();
+        let mut slug = self.slug().to_string();
+        slug.push('.');
+        slug.push_str(locale);
+        path.push(slug);
+        format!("{}.html", path.join("/"))
+    }
+
+    /// Build a permalink given a site base URL.
+    #[must_use]
+    pub fn permalink_for_locale(&self, base_url: &str, locale: &str) -> String {
+        let mut base = base_url.to_string();
+        if !base.ends_with('/') {
+            base.push('/');
+        }
+        base.push_str(&self.output_file_for_locale(locale));
+        base
     }
 
     /// Build a permalink given a site base URL.
@@ -190,6 +263,19 @@ impl ArticlePreview {
         }
         base.push_str(&self.output_file());
         base
+    }
+
+    /// Links to all available translations (including the current locale).
+    #[must_use]
+    pub fn translation_links(&self) -> Vec<TranslationLink> {
+        self.translations()
+            .iter()
+            .map(|t| TranslationLink {
+                locale: t.locale.clone(),
+                title: t.title.clone(),
+                href: self.output_file_for_locale(&t.locale),
+            })
+            .collect()
     }
 
     /// Search script path relative to this article preview.
@@ -298,6 +384,26 @@ impl Article {
     #[must_use]
     pub fn permalink(&self, base_url: &str) -> String {
         self.preview.permalink(base_url)
+    }
+
+    #[must_use]
+    pub fn translation_links(&self) -> Vec<TranslationLink> {
+        self.preview.translation_links()
+    }
+
+    #[must_use]
+    pub fn locale(&self) -> &str {
+        self.preview.locale()
+    }
+
+    #[must_use]
+    pub fn default_locale(&self) -> &str {
+        self.preview.default_locale()
+    }
+
+    #[must_use]
+    pub fn translations(&self) -> &[Translation] {
+        self.preview.translations()
     }
 
     /// Convenience: article content already rendered to HTML.
@@ -414,6 +520,23 @@ pub mod helpers {
             return format_rfc3339(dt);
         };
         dt.format(&fmt).unwrap_or_else(|_| format_rfc3339(dt))
+    }
+
+    /// Render a compact date string using a locale-aware pattern.
+    #[must_use]
+    pub fn format_display_date_locale(locale: &str, dt: OffsetDateTime) -> String {
+        match locale {
+            l if l.starts_with("zh") => {
+                format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
+            }
+            l if l.starts_with("ja") => {
+                format!("{:04}年{:02}月{:02}日", dt.year(), dt.month(), dt.day())
+            }
+            l if l.starts_with("ko") => {
+                format!("{:04}.{:02}.{:02}", dt.year(), dt.month(), dt.day())
+            }
+            _ => format_display_date(dt),
+        }
     }
 
     /// Format an [`OffsetDateTime`] using RFC3339.

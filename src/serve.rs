@@ -11,6 +11,7 @@ use std::{
 
 use color_eyre::eyre::{self, Report, eyre};
 use futures::TryStreamExt;
+use sha2::{Digest, Sha256};
 use skyzen::{
     Body, Error as SkyError, Response, Result as SkyResult, StatusCode,
     header::{self, HeaderValue},
@@ -98,6 +99,7 @@ struct ServeState {
     index_dirty: AtomicBool,
     search_lock: AsyncMutex<()>,
     search_ready: AtomicBool,
+    index_fingerprint: AsyncMutex<Option<String>>,
 }
 
 impl ServeState {
@@ -131,6 +133,7 @@ impl ServeState {
             index_dirty: AtomicBool::new(!index_exists),
             search_lock: AsyncMutex::new(()),
             search_ready: AtomicBool::new(search_ready),
+            index_fingerprint: AsyncMutex::new(None),
         };
 
         if !search_ready {
@@ -210,10 +213,13 @@ impl ServeState {
         if segments.is_empty() {
             return Err(ServeError::NotFound);
         }
+        let (segments, locale) =
+            split_locale_from_segments(segments).ok_or(ServeError::NotFound)?;
         let guard = self.article_guard(&segments).await;
         let _lock = guard.lock().await;
 
-        let article = Article::open(self.workspace.clone(), segments.clone()).await?;
+        let article =
+            Article::open_with_locale(self.workspace.clone(), segments.clone(), locale).await?;
         let html = self.render_article(article.clone()).await?;
 
         let output_path = self.workspace.build_dir().join(html_path);
@@ -221,6 +227,10 @@ impl ServeState {
             .await
             .map_err(ServeError::from)?;
         self.index_dirty.store(true, Ordering::SeqCst);
+        {
+            let mut guard = self.index_fingerprint.lock().await;
+            *guard = None;
+        }
         self.search_ready.store(false, Ordering::SeqCst);
 
         Ok(html_response(html))
@@ -267,12 +277,20 @@ impl ServeState {
     async fn ensure_index(&self) -> Result<PathBuf, ServeError> {
         let index_path = self.workspace.build_dir().join("index.html");
         if file_exists(&index_path).await? && !self.index_dirty.load(Ordering::SeqCst) {
-            return Ok(index_path);
+            let current = self.compute_index_fingerprint().await?;
+            let guard = self.index_fingerprint.lock().await;
+            if guard.as_ref() == Some(&current) {
+                return Ok(index_path);
+            }
         }
 
         let _guard = self.index_lock.lock().await;
         if file_exists(&index_path).await? && !self.index_dirty.load(Ordering::SeqCst) {
-            return Ok(index_path);
+            let current = self.compute_index_fingerprint().await?;
+            let guard = self.index_fingerprint.lock().await;
+            if guard.as_ref() == Some(&current) {
+                return Ok(index_path);
+            }
         }
 
         let previews = self.collect_previews().await?;
@@ -284,6 +302,11 @@ impl ServeState {
             .await
             .map_err(ServeError::from)?;
         self.index_dirty.store(false, Ordering::SeqCst);
+        let fingerprint = self.compute_index_fingerprint().await?;
+        {
+            let mut guard = self.index_fingerprint.lock().await;
+            *guard = Some(fingerprint);
+        }
         Ok(index_path)
     }
 
@@ -291,7 +314,9 @@ impl ServeState {
         let mut previews = Vec::new();
         let mut stream = self.workspace.articles();
         while let Some(article) = stream.try_next().await.map_err(ServeError::internal)? {
-            previews.push(article.preview().clone());
+            if article.is_default_locale() {
+                previews.push(article.preview().clone());
+            }
         }
         Ok(previews)
     }
@@ -325,6 +350,19 @@ impl ServeState {
         let js = self.workspace.build_dir().join(search_script_path());
         let wasm = self.workspace.build_dir().join(search_wasm_path());
         Ok(file_exists(&js).await? && file_exists(&wasm).await?)
+    }
+
+    async fn compute_index_fingerprint(&self) -> Result<String, ServeError> {
+        let mut hasher = Sha256::new();
+        let mut stream = self.workspace.articles();
+        while let Some(article) = stream.try_next().await.map_err(ServeError::internal)? {
+            if !article.is_default_locale() {
+                continue;
+            }
+            hasher.update(article.output_file().as_bytes());
+            hasher.update(article.sha256().as_bytes());
+        }
+        Ok(format!("{:x}", hasher.finalize()))
     }
 }
 
@@ -413,6 +451,26 @@ fn path_segments(relative: &Path) -> Option<Vec<String>> {
         }
     }
     Some(segments)
+}
+
+fn split_locale_from_segments(mut segments: Vec<String>) -> Option<(Vec<String>, Option<String>)> {
+    if segments.is_empty() {
+        return None;
+    }
+    let mut locale = None;
+    if let Some(last) = segments.pop() {
+        if let Some((slug, loc)) = last.split_once('.') {
+            if !slug.is_empty() && !loc.is_empty() {
+                segments.push(slug.to_string());
+                locale = Some(loc.to_string());
+            } else {
+                segments.push(last);
+            }
+        } else {
+            segments.push(last);
+        }
+    }
+    Some((segments, locale))
 }
 
 fn select_port(host: &str, start: u16, allow_fallback: bool) -> eyre::Result<u16> {

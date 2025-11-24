@@ -7,3 +7,4 @@ edition = "2021"
 pulldown-cmark.workspace = true
 time.workspace = true
 wit-bindgen = "0.46.0"
+askama = "0.12.1"

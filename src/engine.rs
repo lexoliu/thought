@@ -46,10 +46,11 @@ impl Engine {
         while let Some(article) = stream.try_next().await? {
             let plugins = self.plugins.clone();
             let cache = cache.clone();
-            previews.push(article.preview().clone());
+            if article.is_default_locale() {
+                previews.push(article.preview().clone());
+            }
             fingerprint.update(article.sha256().as_bytes());
-            let relative_path = article.segments().join("/");
-            let article_output = output.join(format!("{relative_path}.html"));
+            let article_output = output.join(article.output_file());
 
             tasks.push(spawn(async move {
                 let cached_html = {

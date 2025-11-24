@@ -426,10 +426,42 @@ async fn walk_articles(
                                 .ok_or(FailToOpenArticle::WorkspaceNotFound)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    match Article::open(workspace.clone(), segments).await {
+
+                    let primary = Article::open(workspace.clone(), segments.clone()).await;
+                    match primary {
                         Ok(article) => {
-                            if tx.send(Ok(article)).is_err() {
+                            let locales = article
+                                .translations()
+                                .iter()
+                                .map(|t| t.locale.clone())
+                                .collect::<Vec<_>>();
+
+                            if tx.send(Ok(article.clone())).is_err() {
                                 return Ok(());
+                            }
+
+                            for locale in locales {
+                                if locale == article.locale() {
+                                    continue;
+                                }
+                                match Article::open_with_locale(
+                                    workspace.clone(),
+                                    segments.clone(),
+                                    Some(locale),
+                                )
+                                .await
+                                {
+                                    Ok(variant) => {
+                                        if tx.send(Ok(variant)).is_err() {
+                                            return Ok(());
+                                        }
+                                    }
+                                    Err(err) => {
+                                        if tx.send(Err(err)).is_err() {
+                                            return Ok(());
+                                        }
+                                    }
+                                }
                             }
                         }
                         Err(err) => {

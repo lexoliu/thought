@@ -1,6 +1,11 @@
 package thought:plugin;
 
 interface types {
+    record translation {
+        locale: string,
+        title: string,
+    }
+
     record timestamp {
         seconds: s64,
         nanos: u32,
@@ -22,6 +27,7 @@ interface types {
         tags: list<string>,
         author: string,
         description: option<string>,
+        lang: option<string>,
     }
 
     record article-preview {
@@ -30,6 +36,9 @@ interface types {
         category: category,
         metadata: article-metadata,
         description: string,
+        locale: string,
+        default-locale: string,
+        translations: list<translation>,
     }
 
     record article {
