@@ -40,6 +40,7 @@ redb.workspace = true
 rayon = "1.10.0"
 skyzen = { git = "https://github.com/zen-rs/skyzen" }
 mime_guess = "2.0"
+zip = "0.6"
 
 
 [workspace]

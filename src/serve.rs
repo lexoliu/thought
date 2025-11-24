@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io,
+    net::TcpListener,
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
@@ -18,6 +19,7 @@ use skyzen::{
     utils::State,
 };
 use tokio::{fs as async_fs, sync::Mutex, task::spawn_blocking};
+use tracing::info;
 
 use crate::{
     article::{Article, ArticlePreview, FailToOpenArticle},
@@ -31,7 +33,13 @@ use thought_plugin::helpers::{search_asset_dir, search_script_path, search_wasm_
 
 type AsyncMutex<T> = Mutex<T>;
 
-pub async fn serve(workspace: Workspace, host: String, port: u16) -> eyre::Result<()> {
+pub async fn serve(
+    workspace: Workspace,
+    host: String,
+    port: u16,
+    allow_fallback: bool,
+) -> eyre::Result<()> {
+    let port = select_port(&host, port, allow_fallback)?;
     let state = Arc::new(ServeState::new(workspace).await?);
     let address = format!("{host}:{port}");
     unsafe {
@@ -98,6 +106,10 @@ impl ServeState {
         async_fs::create_dir_all(workspace.cache_dir()).await?;
 
         let plugins = PluginManager::resolve_workspace(&workspace).await?;
+        plugins
+            .copy_theme_assets(workspace.build_dir())
+            .await
+            .map_err(|err| eyre!(err))?;
         let cache_path = workspace.cache_dir().join("cache.redb");
         let cache = RenderCache::load(cache_path).await?;
         let search_ready = async_fs::metadata(workspace.build_dir().join(search_script_path()))
@@ -110,7 +122,7 @@ impl ServeState {
             .await
             .is_ok();
 
-        Ok(Self {
+        let state = Self {
             workspace,
             plugins: Arc::new(plugins),
             cache: AsyncMutex::new(cache),
@@ -119,7 +131,16 @@ impl ServeState {
             index_dirty: AtomicBool::new(!index_exists),
             search_lock: AsyncMutex::new(()),
             search_ready: AtomicBool::new(search_ready),
-        })
+        };
+
+        if !search_ready {
+            state
+                .ensure_search_assets()
+                .await
+                .map_err(|err| eyre!(format!("{err:?}")))?;
+        }
+
+        Ok(state)
     }
 
     async fn serve_index(&self) -> Result<Response, ServeError> {
@@ -346,8 +367,8 @@ fn sanitize_relative_path(path: &str) -> Option<PathBuf> {
     for component in Path::new(path).components() {
         match component {
             Component::Normal(segment) => buf.push(segment),
-            Component::CurDir => {}
-            Component::RootDir | Component::Prefix(_) | Component::ParentDir => return None,
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+            Component::ParentDir => return None,
         }
     }
     Some(buf)
@@ -392,6 +413,22 @@ fn path_segments(relative: &Path) -> Option<Vec<String>> {
         }
     }
     Some(segments)
+}
+
+fn select_port(host: &str, start: u16, allow_fallback: bool) -> eyre::Result<u16> {
+    if !allow_fallback {
+        return Ok(start);
+    }
+
+    for port in start..(start + 50) {
+        let addr = format!("{host}:{port}");
+        if TcpListener::bind(&addr).is_ok() {
+            info!("Selected available port {}", port);
+            return Ok(port);
+        }
+    }
+
+    Err(eyre!("No available port found starting at {}", start))
 }
 
 fn is_search_asset(path: &Path) -> bool {

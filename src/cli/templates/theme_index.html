@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="{{ asset_prefix }}assets/style.css">
+    <title>{{ entries | length }} articles</title>
+  </head>
+  <body>
+    <h1>{{ entries | length }} article(s)</h1>
+    <ul>
+    {% for entry in entries %}
+      <li><a href="{{ entry.href }}">{{ entry.title }}</a></li>
+    {% endfor %}
+    {% if entries | length == 0 %}
+      <li>No content yet.</li>
+    {% endif %}
+    </ul>
+    <script src="{{ search_js }}" defer></script>
+  </body>
+</html>

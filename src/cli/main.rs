@@ -1,6 +1,11 @@
 use core::time::Duration;
-use std::{env::current_dir, process::exit};
+use std::{
+    env::current_dir,
+    io::{self, Write},
+    process::exit,
+};
 
+use crate::plugin::{PluginCommands, handle_plugin_command};
 use clap::{Parser, Subcommand};
 use color_eyre::{
     Section,
@@ -13,6 +18,8 @@ use tracing::{error, info, level_filters::LevelFilter};
 use tracing_subscriber::{
     EnvFilter, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
+
+mod plugin;
 
 #[derive(Parser)]
 #[command(about = "Build your thoughts", long_about = None)]
@@ -34,7 +41,7 @@ struct Cli {
 enum Commands {
     // create a new workspace
     Create {
-        name: String,
+        name: Option<String>,
     },
 
     #[command(subcommand)]
@@ -53,8 +60,14 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         /// Port to listen on
-        #[arg(short, long, default_value_t = 8787)]
-        port: u16,
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
+
+    /// Plugin development helpers
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
     },
 }
 
@@ -112,8 +125,18 @@ async fn entry(cli: Cli) -> eyre::Result<()> {
 
     match command {
         Commands::Create { name } => {
+            let name = match name {
+                Some(name) => name,
+                None => prompt_blog_name()?,
+            };
             Workspace::create(current_dir, name).await?;
             info!("Workspace created successfully");
+            Ok(())
+        }
+        Commands::Plugin {
+            command: plugin_cmd,
+        } => {
+            handle_plugin_command(plugin_cmd).await?;
             Ok(())
         }
         command => {
@@ -145,7 +168,11 @@ async fn entry(cli: Cli) -> eyre::Result<()> {
                     Ok(())
                 }
                 Commands::Serve { host, port } => {
-                    serve::serve(workspace.clone(), host, port).await?;
+                    let (port, allow_fallback) = match port {
+                        Some(port) => (port, false),
+                        None => (2006, true),
+                    };
+                    serve::serve(workspace.clone(), host, port, allow_fallback).await?;
                     Ok(())
                 }
                 _ => unreachable!(),
@@ -172,6 +199,23 @@ pub async fn long_task<T, E>(
 
     pb.finish_with_message(complete_msg);
     Ok(result)
+}
+
+fn prompt_blog_name() -> eyre::Result<String> {
+    loop {
+        print!("Blog name: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let name = input.trim().to_string();
+
+        if !name.is_empty() {
+            return Ok(name);
+        }
+
+        println!("Blog name cannot be empty. Please enter a name.");
+    }
 }
 
 async fn run_search(workspace: &Workspace, query: &str, emit_json: bool) -> eyre::Result<()> {

@@ -151,6 +151,9 @@ impl Workspace {
         let mut current = self.articles_dir();
 
         for (index, segment) in segments.iter().enumerate() {
+            if segment == "assets" {
+                return Err(eyre!("Category name 'assets' is reserved"));
+            }
             current.push(segment);
             async_fs::create_dir_all(&current).await?;
 

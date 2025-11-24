@@ -208,6 +208,7 @@ impl PluginEntry {
             name: name.into(),
             locator: PluginLocator::Git {
                 url: url.into(),
+                branch: None,
                 rev: rev.into(),
             },
         }
@@ -224,10 +225,15 @@ pub enum PluginLocator {
     Git {
         #[serde(rename = "git")]
         url: String,
+        #[serde(default)]
+        branch: Option<String>,
         rev: Option<String>,
     },
     Local {
         path: PathBuf,
+    },
+    Url {
+        url: String,
     },
 }
 

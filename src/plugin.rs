@@ -1,4 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use color_eyre::eyre::{self, eyre};
+use tokio::fs;
 use wasmtime::{
     Config, Engine as WasmEngine, Store,
     component::{Component, Linker},
@@ -24,6 +27,7 @@ use resolver::resolve_plugin;
 pub struct PluginManager {
     engine: WasmEngine,
     theme: ThemeHandle,
+    theme_root: PathBuf,
     hooks: Vec<HookHandle>,
 }
 
@@ -40,6 +44,7 @@ impl PluginManager {
         let engine = build_engine()?;
         let mut theme = None;
         let mut hooks = Vec::new();
+        let mut theme_root = None;
 
         for (name, locator) in workspace.manifest().plugins() {
             let mut resolved = resolve_plugin(workspace, name, locator)
@@ -55,6 +60,7 @@ impl PluginManager {
                     let theme_pre = theme::ThemeRuntimePre::new(pre)
                         .map_err(|err: wasmtime::Error| eyre!(err))?;
                     theme = Some(ThemeHandle { pre: theme_pre });
+                    theme_root = Some(resolved.dir().to_path_buf());
                 }
                 PluginKind::Hook => {
                     let hook_pre = hook::HookRuntimePre::new(pre)
@@ -74,6 +80,7 @@ impl PluginManager {
         Ok(Self {
             engine,
             theme,
+            theme_root: theme_root.expect("theme root missing after resolution"),
             hooks,
         })
     }
@@ -122,6 +129,18 @@ impl PluginManager {
             .call_generate_index(&mut store, &wit_previews)
             .map_err(|err| eyre!(err))?;
         Ok(rendered)
+    }
+
+    /// Copy theme assets (if any) into the output directory.
+    pub async fn copy_theme_assets(&self, output_root: impl AsRef<Path>) -> eyre::Result<()> {
+        let source_assets = self.theme_root.join("assets");
+        if !source_assets.exists() {
+            return Ok(());
+        }
+        let target_assets = output_root.as_ref().join("assets");
+        copy_dir_recursive(&source_assets, &target_assets)
+            .await
+            .map_err(|err| eyre!(err))
     }
 
     fn instantiate_theme(&self) -> eyre::Result<(Store<PluginInstanceState>, theme::ThemeRuntime)> {
@@ -181,6 +200,37 @@ impl PluginInstanceState {
             table: ResourceTable::new(),
         }
     }
+}
+
+async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+    while let Some((current_src, current_dst)) = stack.pop() {
+        let metadata = fs::metadata(&current_src).await?;
+        if metadata.is_file() {
+            if let Some(parent) = current_dst.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::copy(&current_src, &current_dst).await?;
+            continue;
+        }
+
+        fs::create_dir_all(&current_dst).await?;
+        let mut entries = fs::read_dir(&current_src).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let target = current_dst.join(entry.file_name());
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                stack.push((path, target));
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).await?;
+                }
+                fs::copy(&path, &target).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 impl WasiView for PluginInstanceState {

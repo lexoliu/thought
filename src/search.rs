@@ -18,7 +18,7 @@ use tantivy::{
         Field, IndexRecordOption, OwnedValue, STORED, Schema, TantivyDocument, TextFieldIndexing,
         TextOptions,
     },
-    tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer},
+    tokenizer::{LowerCaser, NgramTokenizer, RemoveLongFilter, TextAnalyzer},
 };
 use tokio::{fs, task::spawn_blocking};
 use unicode_segmentation::UnicodeSegmentation;
@@ -83,10 +83,11 @@ impl Searcher {
             Index::create_in_dir(&cache_dir, schema.clone())?
         };
 
-        let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+        let ngram = NgramTokenizer::new(1, 3, false).map_err(|err| eyre!(err))?;
+        let analyzer = TextAnalyzer::builder(ngram)
             .filter(RemoveLongFilter::limit(40))
-            .filter(LowerCaser)
-            .build();
+            .filter(LowerCaser);
+        let analyzer = analyzer.build();
         index.tokenizers().register(TOKENIZER, analyzer);
 
         let schema = index.schema();

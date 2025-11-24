@@ -10,7 +10,12 @@
     if (STATE.base) {
       return STATE.base;
     }
-    const current = document.currentScript || document.querySelector("script[data-thought-search]");
+    const current =
+      document.currentScript ||
+      document.querySelector("script[data-thought-search]") ||
+      Array.from(document.querySelectorAll("script[src]")).find((el) =>
+        el.src.includes("thought-search.js")
+      );
     if (current && current.src) {
       STATE.base = current.src.replace(/[^/]+$/, "");
     } else if (typeof window !== "undefined" && window.location) {

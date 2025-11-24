@@ -100,6 +100,11 @@ impl ArticleMetadata {
     }
 
     #[must_use]
+    pub fn created_display(&self) -> String {
+        helpers::format_display_date(self.created())
+    }
+
+    #[must_use]
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
@@ -140,6 +145,82 @@ impl ArticlePreview {
     pub fn category(&self) -> &Category {
         &self.category
     }
+
+    /// Prefix to the assets directory relative to this article preview.
+    #[must_use]
+    pub fn assets_prefix(&self) -> String {
+        let depth = self.category().path().len();
+        if depth == 0 {
+            String::new()
+        } else {
+            "../".repeat(depth)
+        }
+    }
+
+    /// Build an asset path relative to this article preview.
+    #[must_use]
+    pub fn assets_path(&self, filename: &str) -> String {
+        let prefix = self.assets_prefix();
+        if filename.is_empty() {
+            return prefix;
+        }
+        format!("{}assets/{}", prefix, filename.trim_start_matches('/'))
+    }
+
+    /// Relative path (without extension) for the rendered article.
+    #[must_use]
+    pub fn output_path(&self) -> String {
+        let mut path = self.category().path().to_vec();
+        path.push(self.slug().to_string());
+        path.join("/")
+    }
+
+    /// Relative file name (with `.html`) for the rendered article.
+    #[must_use]
+    pub fn output_file(&self) -> String {
+        format!("{}.html", self.output_path())
+    }
+
+    /// Build a permalink given a site base URL.
+    #[must_use]
+    pub fn permalink(&self, base_url: &str) -> String {
+        let mut base = base_url.to_string();
+        if !base.ends_with('/') {
+            base.push('/');
+        }
+        base.push_str(&self.output_file());
+        base
+    }
+
+    /// Search script path relative to this article preview.
+    #[must_use]
+    pub fn search_script_path(&self) -> String {
+        let depth = self.category().path().len();
+        format!(
+            "{}{}",
+            if depth == 0 {
+                String::new()
+            } else {
+                "../".repeat(depth)
+            },
+            helpers::search_script_path()
+        )
+    }
+
+    /// Search wasm path relative to this article preview.
+    #[must_use]
+    pub fn search_wasm_path(&self) -> String {
+        let depth = self.category().path().len();
+        format!(
+            "{}{}",
+            if depth == 0 {
+                String::new()
+            } else {
+                "../".repeat(depth)
+            },
+            helpers::search_wasm_path()
+        )
+    }
 }
 
 impl Article {
@@ -166,6 +247,63 @@ impl Article {
     #[must_use]
     pub fn preview(&self) -> &ArticlePreview {
         &self.preview
+    }
+
+    /// Prefix to the assets directory relative to this article.
+    #[must_use]
+    pub fn assets_prefix(&self) -> String {
+        let depth = self.preview().category().path().len();
+        if depth == 0 {
+            String::new()
+        } else {
+            "../".repeat(depth)
+        }
+    }
+
+    /// Build an asset path relative to this article.
+    #[must_use]
+    pub fn assets_path(&self, filename: &str) -> String {
+        let prefix = self.assets_prefix();
+        if filename.is_empty() {
+            return prefix;
+        }
+        format!("{}assets/{}", prefix, filename.trim_start_matches('/'))
+    }
+
+    /// Search script path relative to this article.
+    #[must_use]
+    pub fn search_script_path(&self) -> String {
+        self.preview().search_script_path()
+    }
+
+    /// Search wasm path relative to this article.
+    #[must_use]
+    pub fn search_wasm_path(&self) -> String {
+        self.preview().search_wasm_path()
+    }
+
+    /// Relative path (without extension) for this article's output.
+    #[must_use]
+    pub fn output_path(&self) -> String {
+        self.preview.output_path()
+    }
+
+    /// Relative file name (with `.html`) for this article's output.
+    #[must_use]
+    pub fn output_file(&self) -> String {
+        self.preview.output_file()
+    }
+
+    /// Build a permalink given a site base URL.
+    #[must_use]
+    pub fn permalink(&self, base_url: &str) -> String {
+        self.preview.permalink(base_url)
+    }
+
+    /// Convenience: article content already rendered to HTML.
+    #[must_use]
+    pub fn content_html(&self) -> String {
+        helpers::article_content_html(self)
     }
 }
 
@@ -205,7 +343,7 @@ impl CategoryMetadata {
 
 pub mod helpers {
     use crate::pulldown_cmark::{html, Parser};
-    use crate::{Article, ArticlePreview};
+    use crate::Article;
     use std::fmt;
     use time::{format_description, format_description::well_known, OffsetDateTime};
 
@@ -221,37 +359,6 @@ pub mod helpers {
         let mut html_output = String::new();
         html::push_html(&mut html_output, parser);
         html_output
-    }
-
-    /// Join the category path segments for an article preview.
-    #[must_use]
-    pub fn article_path(article: &ArticlePreview) -> String {
-        article.category().path_string()
-    }
-
-    /// Build the relative output path (without extension) for an article.
-    #[must_use]
-    pub fn article_output_path(article: &ArticlePreview) -> String {
-        let mut path = article.category().path().to_vec();
-        path.push(article.slug().to_string());
-        path.join("/")
-    }
-
-    /// Build the relative output file (with `.html`) for an article.
-    #[must_use]
-    pub fn article_output_file(article: &ArticlePreview) -> String {
-        format!("{}.html", article_output_path(article))
-    }
-
-    /// Build a permalink by combining a base URL and the relative article path.
-    #[must_use]
-    pub fn article_permalink(base_url: &str, article: &ArticlePreview) -> String {
-        let mut base = base_url.to_string();
-        if !base.ends_with('/') {
-            base.push('/');
-        }
-        base.push_str(&article_output_file(article));
-        base
     }
 
     #[must_use]
@@ -281,43 +388,32 @@ pub mod helpers {
         format!("{}/{}", SEARCH_ASSET_DIR, SEARCH_WASM_FILENAME)
     }
 
-    fn relative_prefix(depth: usize) -> String {
-        if depth == 0 {
-            String::new()
-        } else {
-            "../".repeat(depth)
-        }
+    /// Build an assets prefix for the blog index page.
+    #[must_use]
+    pub fn index_assets_prefix() -> &'static str {
+        ""
     }
 
-    /// Path to the search script relative to a page that is nested `depth` directories deep.
+    /// Build an asset path for the blog index page.
     #[must_use]
-    pub fn search_script_path_at_depth(depth: usize) -> String {
-        format!("{}{}", relative_prefix(depth), SEARCH_SCRIPT_PATH)
+    pub fn index_assets_path(filename: &str) -> String {
+        format!("assets/{filename}")
     }
 
-    /// Path to the search wasm relative to a page that is nested `depth` directories deep.
+    /// Search script path for the index page.
     #[must_use]
-    pub fn search_wasm_path_at_depth(depth: usize) -> String {
-        format!(
-            "{}{}/{}",
-            relative_prefix(depth),
-            SEARCH_ASSET_DIR,
-            SEARCH_WASM_FILENAME
-        )
+    pub fn index_search_script_path() -> &'static str {
+        SEARCH_SCRIPT_PATH
     }
 
-    /// Convenience helper for article pages.
+    /// A compact, human readable date like "Mon Nov 24".
     #[must_use]
-    pub fn search_script_for_article(article: &ArticlePreview) -> String {
-        let depth = article.category().path().len();
-        search_script_path_at_depth(depth)
-    }
-
-    /// Convenience helper for article pages.
-    #[must_use]
-    pub fn search_wasm_for_article(article: &ArticlePreview) -> String {
-        let depth = article.category().path().len();
-        search_wasm_path_at_depth(depth)
+    pub fn format_display_date(dt: OffsetDateTime) -> String {
+        let Ok(fmt) = format_description::parse("[weekday repr:short] [month repr:short] [day]")
+        else {
+            return format_rfc3339(dt);
+        };
+        dt.format(&fmt).unwrap_or_else(|_| format_rfc3339(dt))
     }
 
     /// Format an [`OffsetDateTime`] using RFC3339.

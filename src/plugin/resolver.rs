@@ -1,5 +1,6 @@
 use std::{
     fs as std_fs, io,
+    io::Cursor,
     path::{Path, PathBuf},
 };
 
@@ -7,11 +8,14 @@ use color_eyre::eyre::{bail, eyre};
 use flate2::read::GzDecoder;
 use git2::Repository;
 use serde_json::Value;
+use skyzen::{BodyError, HttpError, header};
 use tar::Archive;
 use thiserror::Error;
 use tokio::{fs, process::Command, task};
+use tracing::warn;
 use url::Url;
-use zenwave::{Client, Error as HttpError, ResponseExt, StatusCode};
+use zenwave::{Client, ResponseExt, StatusCode, error::BoxHttpError};
+use zip::ZipArchive;
 
 use crate::{
     metadata::{FailToOpenMetadata, MetadataExt, PluginLocator, PluginManifest},
@@ -22,7 +26,8 @@ use crate::{
 /// A resolved plugin ready to be built and used
 #[derive(Debug)]
 pub struct ResolvedPlugin {
-    built: bool, // Whether the plugin has been built
+    built: bool,       // Whether the plugin has been built
+    force_build: bool, // Always rebuild even if wasm exists (local path)
     manifest: PluginManifest,
     // here is a `main.wasm` file under the dir, which can be executed via WASI preview 2
     dir: PathBuf,
@@ -53,18 +58,14 @@ impl ResolvedPlugin {
 
     /// Build the plugin if it is not built yet
     pub async fn build(&mut self) -> color_eyre::eyre::Result<()> {
-        if self.is_built() {
+        if self.is_built() && !self.force_build {
             return Ok(());
         }
 
         let wasm_binary = self.wasm_path();
-        if fs::metadata(&wasm_binary).await.is_err() {
-            run_component_build(&self.dir).await?;
-            if fs::metadata(&wasm_binary).await.is_err() {
-                let artifact = locate_component_artifact(&self.dir).await?;
-                fs::copy(&artifact, &wasm_binary).await?;
-            }
-        }
+        run_component_build(&self.dir).await?;
+        let artifact = locate_component_artifact(&self.dir).await?;
+        fs::copy(&artifact, &wasm_binary).await?;
 
         self.built = true;
         Ok(())
@@ -78,9 +79,14 @@ pub enum ResolvePluginError {
     #[error("I/O error while preparing plugin: {0}")]
     Io(#[from] io::Error),
     #[error("Network error while downloading plugin: {0}")]
-    Network(#[from] zenwave::Error),
+    Network(#[from] zenwave::error::BoxHttpError),
     #[error("Git error: {0}")]
     Git(#[from] git2::Error),
+
+    #[error("Fail to fetch GitHub release: {0}")]
+    FailToFetchGitHubRelease(BodyError),
+    #[error("Invalid plugin locator: {0}")]
+    InvalidLocator(String),
 }
 
 pub async fn resolve_plugin(
@@ -112,22 +118,43 @@ pub async fn resolve_plugin(
             PluginLocator::CratesIo { version } => {
                 download_crate(name, version, &plugin_dir).await?;
             }
-            PluginLocator::Git { url, rev } => {
+            PluginLocator::Git { url, rev, branch } => {
+                if rev.is_some() && branch.is_some() {
+                    return Err(ResolvePluginError::InvalidLocator(
+                        "rev and branch cannot be set simultaneously".to_string(),
+                    ));
+                }
                 if let Some((author, repo)) = parse_github(url) {
-                    let tag = rev.as_deref().unwrap_or("latest");
+                    let tag = rev
+                        .as_deref()
+                        .or_else(|| branch.as_deref())
+                        .unwrap_or("latest");
                     if try_github_release(&author, &repo, tag, &plugin_dir)
                         .await?
                         .is_none()
                     {
-                        clone_repo(url, rev.as_deref(), &plugin_dir).await?;
+                        clone_repo(
+                            url,
+                            rev.as_deref().or_else(|| branch.as_deref()),
+                            &plugin_dir,
+                        )
+                        .await?;
                     }
                 } else {
-                    clone_repo(url, rev.as_deref(), &plugin_dir).await?;
+                    clone_repo(
+                        url,
+                        rev.as_deref().or_else(|| branch.as_deref()),
+                        &plugin_dir,
+                    )
+                    .await?;
                 }
             }
             PluginLocator::Local { path } => {
                 let source = fs::canonicalize(path).await?;
                 copy_dir_recursive(&source, &plugin_dir).await?;
+            }
+            PluginLocator::Url { url } => {
+                fetch_artifact(url, &plugin_dir).await?;
             }
         };
         if allow_reuse {
@@ -139,12 +166,21 @@ pub async fn resolve_plugin(
 
     let manifest = PluginManifest::open(dir.join("Plugin.toml")).await?;
     let wasm_ready = fs::try_exists(dir.join("main.wasm")).await.unwrap_or(false);
+    let force_build = matches!(locator, PluginLocator::Local { .. });
 
     Ok(ResolvedPlugin {
-        built: wasm_ready,
+        built: wasm_ready && !force_build,
+        force_build,
         manifest,
         dir,
     })
+}
+
+fn as_client_error<T>(err: T) -> BoxHttpError
+where
+    T: HttpError + 'static,
+{
+    Box::new(err)
 }
 
 async fn try_github_release(
@@ -159,7 +195,11 @@ async fn try_github_release(
     } else {
         format!("https://api.github.com/repos/{author}/{repo}/releases/tags/{tag}")
     };
-    let response = client.get(api_url).header("User-Agent", "thought").await?;
+    let response = client
+        .get(api_url)
+        .header("User-Agent", "thought")
+        .await
+        .map_err(as_client_error)?;
     if response.status() == StatusCode::NOT_FOUND || !response.status().is_success() {
         return Ok(None);
     }
@@ -167,7 +207,7 @@ async fn try_github_release(
     let payload: Value = response
         .into_json()
         .await
-        .map_err(|err| HttpError::new(err, StatusCode::BAD_REQUEST))?;
+        .map_err(ResolvePluginError::FailToFetchGitHubRelease)?;
     let Some(assets) = payload["assets"].as_array() else {
         return Ok(None);
     };
@@ -182,9 +222,10 @@ async fn try_github_release(
 
         let bytes = client
             .get(download_url)
-            .header("User-Agent", "thought")
+            .header(header::USER_AGENT, "thought")
             .bytes()
-            .await?;
+            .await
+            .map_err(as_client_error)?;
 
         fs::create_dir_all(target).await?;
         if name.ends_with(".wasm") {
@@ -194,6 +235,11 @@ async fn try_github_release(
         }
         if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
             unpack_tarball(bytes.as_ref(), target).await?;
+            flatten_directory(target).await?;
+            return Ok(Some(target.to_path_buf()));
+        }
+        if name.ends_with(".zip") {
+            unpack_zip(bytes.as_ref(), target).await?;
             flatten_directory(target).await?;
             return Ok(Some(target.to_path_buf()));
         }
@@ -248,11 +294,64 @@ async fn download_crate(
         .get(url)
         .header("User-Agent", "thought")
         .bytes()
-        .await?;
+        .await
+        .map_err(as_client_error)?;
     fs::create_dir_all(target).await?;
     unpack_tarball(bytes.as_ref(), target).await?;
     flatten_directory(target).await?;
     Ok(())
+}
+
+async fn fetch_artifact(url: &str, target: &Path) -> Result<(), ResolvePluginError> {
+    let parsed =
+        Url::parse(url).map_err(|err| ResolvePluginError::InvalidLocator(err.to_string()))?;
+    let bytes = match parsed.scheme() {
+        "file" => {
+            let path = parsed.to_file_path().map_err(|_| {
+                ResolvePluginError::InvalidLocator(format!("Invalid file:// url: {url}"))
+            })?;
+            fs::read(path).await?
+        }
+        "http" | "https" => {
+            if parsed.scheme() == "http" {
+                warn!("Using insecure HTTP to download plugin artifact: {}", url);
+            }
+            let mut client = zenwave::client();
+            client
+                .get(url.to_string())
+                .header("User-Agent", "thought")
+                .bytes()
+                .await
+                .map_err(as_client_error)?
+                .to_vec()
+        }
+        other => {
+            return Err(ResolvePluginError::InvalidLocator(format!(
+                "Unsupported URL scheme `{other}`"
+            )));
+        }
+    };
+    fs::create_dir_all(target).await?;
+
+    let lower = url.to_ascii_lowercase();
+    if lower.ends_with(".wasm") {
+        fs::write(target.join("main.wasm"), &bytes).await?;
+        return Ok(());
+    }
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        unpack_tarball(bytes.as_ref(), target).await?;
+        flatten_directory(target).await?;
+        return Ok(());
+    }
+    if lower.ends_with(".zip") {
+        unpack_zip(bytes.as_ref(), target).await?;
+        flatten_directory(target).await?;
+        return Ok(());
+    }
+
+    Err(ResolvePluginError::InvalidLocator(format!(
+        "Unsupported artifact url: {url}"
+    )))
 }
 
 async fn unpack_tarball(bytes: &[u8], target: &Path) -> io::Result<()> {
@@ -262,6 +361,23 @@ async fn unpack_tarball(bytes: &[u8], target: &Path) -> io::Result<()> {
         let decoder = GzDecoder::new(&data[..]);
         let mut archive = Archive::new(decoder);
         archive.unpack(&target)?;
+        Ok(())
+    })
+    .await
+    .map_err(io::Error::other)??;
+    Ok(())
+}
+
+async fn unpack_zip(bytes: &[u8], target: &Path) -> io::Result<()> {
+    let data = bytes.to_vec();
+    let target = target.to_path_buf();
+    task::spawn_blocking(move || -> io::Result<()> {
+        let reader = Cursor::new(data);
+        let mut archive =
+            ZipArchive::new(reader).map_err(|err| io::Error::other(format!("{err:?}")))?;
+        archive
+            .extract(&target)
+            .map_err(|err| io::Error::other(format!("{err:?}")))?;
         Ok(())
     })
     .await

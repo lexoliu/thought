@@ -53,7 +53,7 @@ cargo install --path .
     ```bash
     thought serve
     ```
-    Your site will be available at `http://127.0.0.1:8080`.
+    Your site will be available at `http://127.0.0.1:2006`.
 
 ## CLI Commands
 
@@ -67,7 +67,7 @@ cargo install --path .
 
 ## Search Integration
 
-Running `thought generate` emits a browser bundle under `assets/thought-search/` (a WebAssembly payload plus `thought-search.js`). Themes can include the helper script via `helpers::search_script_path()` or `helpers::search_script_path_at_depth(depth)` (useful for nested pages), then call `window.ThoughtSearch.search("<query>")` to fetch ranked matches without reimplementing indexing logic.
+Running `thought generate` emits a browser bundle under `assets/thought-search/` (a WebAssembly payload plus `thought-search.js`). Themes can include the helper script via `Article::search_script_path()` (or `index_search_script_path()` on the index), then call `window.ThoughtSearch.search("<query>")` to fetch ranked matches without reimplementing indexing logic.
 
 ## Configuration
 

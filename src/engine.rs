@@ -33,6 +33,7 @@ impl Engine {
         let cache_path = self.workspace.cache_dir().join("cache.redb");
         let cache = RenderCache::load(cache_path).await?;
         let cache = Arc::new(Mutex::new(cache));
+        self.plugins.copy_theme_assets(output).await?;
 
         let stream = self.workspace.articles();
         futures::pin_mut!(stream);
