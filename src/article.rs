@@ -339,6 +339,11 @@ impl Article {
             },
             "description": self.description(),
             "content": self.content(),
+            "translations": self
+                .translations()
+                .iter()
+                .map(|t| json!({"locale": t.locale(), "title": t.title()}))
+                .collect::<Vec<_>>(),
         }))
         .expect("Failed to serialize article to JSON");
         let mut hasher = sha2::Sha256::new();
