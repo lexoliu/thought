@@ -42,10 +42,12 @@ impl Engine {
 
         let mut previews = Vec::new();
         let mut fingerprint = Sha256::new();
+        let theme_fp = self.plugins.theme_fingerprint().to_string();
 
         while let Some(article) = stream.try_next().await? {
             let plugins = self.plugins.clone();
             let cache = cache.clone();
+            let theme_fp = theme_fp.clone();
             if article.is_default_locale() {
                 previews.push(article.preview().clone());
             }
@@ -55,7 +57,7 @@ impl Engine {
             tasks.push(spawn(async move {
                 let cached_html = {
                     let cache = cache.lock().await;
-                    cache.hit(&article)
+                    cache.hit(&article, &theme_fp)
                 };
 
                 if let Some(html) = cached_html {
@@ -68,7 +70,7 @@ impl Engine {
 
                 {
                     let mut cache = cache.lock().await;
-                    cache.store(&article, &rendered);
+                    cache.store(&article, &rendered, &theme_fp);
                 }
 
                 Ok(())

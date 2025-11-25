@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{self, eyre};
+use sha2::{Digest, Sha256};
 use tokio::fs;
 use wasmtime::{
     Config, Engine as WasmEngine, Store,
@@ -28,6 +29,7 @@ pub struct PluginManager {
     engine: WasmEngine,
     theme: ThemeHandle,
     theme_root: PathBuf,
+    theme_fingerprint: String,
     hooks: Vec<HookHandle>,
 }
 
@@ -77,10 +79,17 @@ impl PluginManager {
             )
         })?;
 
+        let theme_root_path = theme_root
+            .as_ref()
+            .expect("theme root missing after resolution")
+            .to_path_buf();
+        let theme_fingerprint = hash_theme_dir(&theme_root_path)?;
+
         Ok(Self {
             engine,
             theme,
-            theme_root: theme_root.expect("theme root missing after resolution"),
+            theme_root: theme_root_path,
+            theme_fingerprint,
             hooks,
         })
     }
@@ -169,6 +178,10 @@ impl PluginManager {
         let ctx = WasiCtxBuilder::new().build();
         Ok(Store::new(&self.engine, PluginInstanceState::new(ctx)))
     }
+
+    pub fn theme_fingerprint(&self) -> &str {
+        &self.theme_fingerprint
+    }
 }
 
 fn build_engine() -> eyre::Result<WasmEngine> {
@@ -200,6 +213,37 @@ impl PluginInstanceState {
             table: ResourceTable::new(),
         }
     }
+}
+
+fn hash_theme_dir(root: &Path) -> eyre::Result<String> {
+    let mut hasher = Sha256::new();
+    hash_dir_recursive(root, root, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_dir_recursive(root: &Path, dir: &Path, hasher: &mut Sha256) -> eyre::Result<()> {
+    let mut entries = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == "target" || name_str == ".git" {
+            continue;
+        }
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            hash_dir_recursive(root, &path, hasher)?;
+        } else if meta.is_file() {
+            hasher.update(rel.to_string_lossy().as_bytes());
+            let bytes = std::fs::read(&path)?;
+            hasher.update(&bytes);
+        }
+    }
+    Ok(())
 }
 
 async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {

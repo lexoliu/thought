@@ -100,6 +100,7 @@ struct ServeState {
     search_lock: AsyncMutex<()>,
     search_ready: AtomicBool,
     index_fingerprint: AsyncMutex<Option<String>>,
+    theme_fingerprint: String,
 }
 
 impl ServeState {
@@ -108,6 +109,7 @@ impl ServeState {
         async_fs::create_dir_all(workspace.cache_dir()).await?;
 
         let plugins = PluginManager::resolve_workspace(&workspace).await?;
+        let theme_fingerprint = plugins.theme_fingerprint().to_string();
         plugins
             .copy_theme_assets(workspace.build_dir())
             .await
@@ -134,6 +136,7 @@ impl ServeState {
             search_lock: AsyncMutex::new(()),
             search_ready: AtomicBool::new(search_ready),
             index_fingerprint: AsyncMutex::new(None),
+            theme_fingerprint,
         };
 
         if !search_ready {
@@ -238,12 +241,12 @@ impl ServeState {
 
     async fn fetch_cache_html(&self, article: &Article) -> Option<String> {
         let cache = self.cache.lock().await;
-        cache.hit(article)
+        cache.hit(article, &self.theme_fingerprint)
     }
 
     async fn store_cache_html(&self, article: &Article, html: &str) -> Result<(), ServeError> {
         let mut cache = self.cache.lock().await;
-        cache.store(article, html);
+        cache.store(article, html, &self.theme_fingerprint);
         cache
             .persist()
             .await

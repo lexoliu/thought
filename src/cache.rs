@@ -17,23 +17,27 @@ struct CachedArticle {
     description: String,
     metadata: ArticleMetadata,
     html: String,
+    #[serde(default)]
+    theme_fingerprint: String,
 }
 
 impl CachedArticle {
-    fn matches(&self, article: &Article) -> bool {
+    fn matches(&self, article: &Article, theme_fingerprint: &str) -> bool {
         self.sha256 == article.sha256()
             && self.title == article.title()
             && self.description == article.description()
             && self.metadata == *article.metadata()
+            && self.theme_fingerprint == theme_fingerprint
     }
 
-    fn from_article(article: &Article, html: &str) -> Self {
+    fn from_article(article: &Article, html: &str, theme_fingerprint: &str) -> Self {
         Self {
             sha256: article.sha256(),
             title: article.title().to_string(),
             description: article.description().to_string(),
             metadata: article.metadata().clone(),
             html: html.to_string(),
+            theme_fingerprint: theme_fingerprint.to_string(),
         }
     }
 }
@@ -52,17 +56,21 @@ impl RenderCache {
         Ok(Self { entries, db })
     }
 
-    pub fn hit(&self, article: &Article) -> Option<String> {
+    pub fn hit(&self, article: &Article, theme_fingerprint: &str) -> Option<String> {
         let key = Self::article_key(article);
-        self.entries
-            .get(&key)
-            .and_then(|entry| entry.matches(article).then(|| entry.html.clone()))
+        self.entries.get(&key).and_then(|entry| {
+            entry
+                .matches(article, theme_fingerprint)
+                .then(|| entry.html.clone())
+        })
     }
 
-    pub fn store(&mut self, article: &Article, html: &str) {
+    pub fn store(&mut self, article: &Article, html: &str, theme_fingerprint: &str) {
         let key = Self::article_key(article);
-        self.entries
-            .insert(key, CachedArticle::from_article(article, html));
+        self.entries.insert(
+            key,
+            CachedArticle::from_article(article, html, theme_fingerprint),
+        );
     }
 
     pub async fn persist(&self) -> eyre::Result<()> {
