@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use sha2::Digest;
+use whatlang::{Lang, detect};
 
 use crate::{
     category::Category,
@@ -121,10 +122,8 @@ impl Article {
         description: impl Into<String>,
         content: impl Into<String>,
     ) -> Self {
-        let default_locale = metadata
-            .lang()
-            .map(|l| l.to_string())
-            .unwrap_or_else(|| "en".to_string());
+        let content = content.into();
+        let default_locale = resolve_default_locale(metadata.lang(), &content);
         let title = title.into();
         let slug = slug.into();
         let description = description.into();
@@ -133,7 +132,7 @@ impl Article {
             title: title.clone(),
         }];
         Self {
-            content: content.into(),
+            content,
             preview: ArticlePreview {
                 title,
                 slug,
@@ -184,10 +183,7 @@ impl Article {
         let metadata = ArticleMetadata::open(metadata_path)
             .await
             .map_err(FailToOpenArticle::FailToOpenMetadata)?;
-        let default_locale = metadata
-            .lang()
-            .map(|l| l.to_string())
-            .unwrap_or_else(|| "en".to_string());
+        let default_locale = resolve_default_locale_from_disk(&full_path, metadata.lang()).await?;
 
         let available = enumerate_locales(&full_path, &default_locale).await?;
         let target_locale = locale.unwrap_or_else(|| default_locale.clone());
@@ -355,6 +351,149 @@ impl Article {
 
 use pulldown_cmark::{Event, Parser, Tag};
 use time::macros::format_description;
+
+fn resolve_default_locale(metadata_lang: Option<&str>, content: &str) -> String {
+    if let Some(lang) = normalize_lang_tag(metadata_lang) {
+        return lang;
+    }
+    detect_locale_from_text(content).unwrap_or_else(|| "en".to_string())
+}
+
+async fn resolve_default_locale_from_disk(
+    article_dir: &Path,
+    metadata_lang: Option<&str>,
+) -> Result<String, FailToOpenArticle> {
+    if let Some(lang) = normalize_lang_tag(metadata_lang) {
+        return Ok(lang);
+    }
+
+    let primary = article_dir.join("article.md");
+    if let Ok(content) = read_to_string(&primary).await {
+        if let Some(lang) = detect_locale_from_text(&content) {
+            return Ok(lang);
+        }
+    }
+
+    let mut entries = tokio::fs::read_dir(article_dir)
+        .await
+        .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|_| FailToOpenArticle::ArticleNotFound)?
+    {
+        if entry
+            .file_type()
+            .await
+            .map_err(|_| FailToOpenArticle::ArticleNotFound)?
+            .is_file()
+        {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(content) = read_to_string(&path).await {
+                if let Some(lang) = detect_locale_from_text(&content) {
+                    return Ok(lang);
+                }
+            }
+        }
+    }
+
+    Ok("en".to_string())
+}
+
+fn detect_locale_from_text(text: &str) -> Option<String> {
+    let info = detect(text)?;
+    if !(info.is_reliable() || info.confidence() >= 0.5) {
+        return None;
+    }
+    Some(lang_to_locale(info.lang()))
+}
+
+fn normalize_lang_tag(lang: Option<&str>) -> Option<String> {
+    lang.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn lang_to_locale(lang: Lang) -> String {
+    match lang {
+        Lang::Eng => "en",
+        Lang::Cmn => "zh",
+        Lang::Spa => "es",
+        Lang::Por => "pt",
+        Lang::Fra => "fr",
+        Lang::Deu => "de",
+        Lang::Rus => "ru",
+        Lang::Ukr => "uk",
+        Lang::Jpn => "ja",
+        Lang::Kor => "ko",
+        Lang::Ara => "ar",
+        Lang::Hin => "hi",
+        Lang::Ben => "bn",
+        Lang::Ita => "it",
+        Lang::Nld => "nl",
+        Lang::Swe => "sv",
+        Lang::Fin => "fi",
+        Lang::Tur => "tr",
+        Lang::Pol => "pl",
+        Lang::Vie => "vi",
+        Lang::Tha => "th",
+        Lang::Heb => "he",
+        Lang::Cat => "ca",
+        Lang::Ron => "ro",
+        Lang::Ces => "cs",
+        Lang::Ell => "el",
+        Lang::Hun => "hu",
+        Lang::Dan => "da",
+        Lang::Nob => "nb",
+        Lang::Bul => "bg",
+        Lang::Bel => "be",
+        Lang::Mar => "mr",
+        Lang::Kan => "kn",
+        Lang::Tam => "ta",
+        Lang::Urd => "ur",
+        Lang::Uzb => "uz",
+        Lang::Aze => "az",
+        Lang::Ind => "id",
+        Lang::Tel => "te",
+        Lang::Pes => "fa",
+        Lang::Mal => "ml",
+        Lang::Ori => "or",
+        Lang::Mya => "my",
+        Lang::Nep => "ne",
+        Lang::Sin => "si",
+        Lang::Khm => "km",
+        Lang::Tuk => "tk",
+        Lang::Aka => "ak",
+        Lang::Zul => "zu",
+        Lang::Sna => "sn",
+        Lang::Afr => "af",
+        Lang::Lat => "la",
+        Lang::Slk => "sk",
+        Lang::Tgl => "tl",
+        Lang::Hrv => "hr",
+        Lang::Srp => "sr",
+        Lang::Mkd => "mk",
+        Lang::Lit => "lt",
+        Lang::Lav => "lv",
+        Lang::Est => "et",
+        Lang::Amh => "am",
+        Lang::Jav => "jv",
+        Lang::Pan => "pa",
+        Lang::Kat => "ka",
+        Lang::Hye => "hy",
+        Lang::Yid => "yi",
+        _ => lang.code(),
+    }
+    .to_string()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FailToOpenArticle {

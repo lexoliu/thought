@@ -82,6 +82,52 @@
     return score;
   }
 
+  function normalizeLocale(locale) {
+    return (locale || "").toLowerCase();
+  }
+
+  function recordKey(record) {
+    const segments = Array.isArray(record.category)
+      ? record.category.filter(Boolean)
+      : [];
+    const slug = record.slug || record.permalink || record.title || "";
+    if (segments.length === 0) {
+      return slug;
+    }
+    return `${segments.join("/")}/${slug}`;
+  }
+
+  function preferLocale(records, preferredLocale) {
+    if (!Array.isArray(records) || records.length === 0) {
+      return [];
+    }
+    const preferred = normalizeLocale(preferredLocale);
+    const groups = new Map();
+    const filtered = [];
+
+    for (const record of records) {
+      const key = recordKey(record);
+      const existing = groups.get(key);
+      const isPreferred = preferred && normalizeLocale(record.locale) === preferred;
+      const isDefault =
+        normalizeLocale(record.locale) === normalizeLocale(record.default_locale);
+
+      if (!existing) {
+        const index = filtered.length;
+        filtered.push(record);
+        groups.set(key, { record, index, isPreferred, isDefault });
+        continue;
+      }
+
+      if (isPreferred || (!existing.isPreferred && isDefault)) {
+        filtered[existing.index] = record;
+        groups.set(key, { record, index: existing.index, isPreferred, isDefault });
+      }
+    }
+
+    return filtered;
+  }
+
   async function loadIndex() {
     if (STATE.loading) {
       return STATE.loading;
@@ -103,7 +149,7 @@
     return STATE.loading;
   }
 
-  async function search(query) {
+  async function search(query, preferredLocale) {
     const trimmed = (query || "").trim();
     if (!trimmed) {
       return [];
@@ -114,7 +160,7 @@
       return [];
     }
 
-    return index
+    const scored = index
       .map((record) => ({
         record,
         score: recordScore(record, normalizedTokens),
@@ -122,10 +168,13 @@
       .filter((entry) => entry.score > 0)
       .sort((a, b) => b.score - a.score)
       .map((entry) => entry.record);
+
+    return preferLocale(scored, preferredLocale);
   }
 
   globalScope.ThoughtSearch = {
     search,
+    preferLocale,
     ready: () => loadIndex(),
   };
 })();

@@ -75,7 +75,7 @@ enum Commands {
     /// Translate all articles into the given language code (uses OpenRouter).
     Translate {
         /// Target language code, e.g. zh-CN, ja, fr
-        language: String,
+        language: Option<String>,
     },
 }
 

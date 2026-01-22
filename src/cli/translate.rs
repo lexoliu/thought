@@ -1,4 +1,8 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use aither::{
     LanguageModel,
@@ -6,19 +10,31 @@ use aither::{
     openai::OpenAI,
 };
 use color_eyre::eyre::{self, Context, eyre};
+use dialoguer::{Select, theme::ColorfulTheme};
 use futures::{StreamExt, TryStreamExt, pin_mut};
 use indicatif::{ProgressBar, ProgressStyle};
+use regex::Regex;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
 use thought::{article::Article, workspace::Workspace};
 
-pub async fn run_translate(workspace: Workspace, language: String) -> eyre::Result<()> {
-    let target = language.trim();
-    if target.is_empty() {
-        return Err(eyre!("Language code cannot be empty"));
-    }
-    let target = target.to_string();
+const LANGUAGE_EXAMPLES: [(&str, &str); 11] = [
+    ("🇨🇳", "zh-CN"),
+    ("🇹🇼", "zh-TW"),
+    ("🇺🇸", "en-US"),
+    ("🇯🇵", "ja-JP"),
+    ("🇰🇷", "ko-KR"),
+    ("🇪🇸", "es-ES"),
+    ("🇫🇷", "fr-FR"),
+    ("🇩🇪", "de-DE"),
+    ("🇧🇷", "pt-BR"),
+    ("🇷🇺", "ru-RU"),
+    ("🇮🇳", "hi-IN"),
+];
+
+pub async fn run_translate(workspace: Workspace, language: Option<String>) -> eyre::Result<()> {
+    let target = resolve_language_code(language)?;
 
     let config = workspace.manifest().translation_config();
     let models = config.effective_models();
@@ -189,4 +205,72 @@ async fn write_file(path: &Path, contents: &str) -> eyre::Result<()> {
     }
     tokio::fs::write(path, contents).await?;
     Ok(())
+}
+
+fn resolve_language_code(language: Option<String>) -> eyre::Result<String> {
+    match language {
+        Some(raw) if !raw.trim().is_empty() => parse_language_code(Some(raw)),
+        _ => {
+            let selection = prompt_language_selection()?;
+            parse_language_code(Some(selection))
+        }
+    }
+}
+
+fn parse_language_code(language: Option<String>) -> eyre::Result<String> {
+    let Some(input) = language else {
+        return Err(missing_language_error());
+    };
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(missing_language_error());
+    }
+    if !is_valid_language_code(trimmed) {
+        return Err(invalid_language_error(trimmed));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn missing_language_error() -> eyre::Report {
+    eyre!(
+        "Please provide a target language code (BCP-47, e.g. en-US).\nExamples: {}",
+        format_language_examples()
+    )
+}
+
+fn invalid_language_error(code: &str) -> eyre::Report {
+    eyre!(
+        "Invalid language code `{code}`. Use a BCP-47 style code with letters and optional region (e.g. en-US).\nExamples: {}",
+        format_language_examples()
+    )
+}
+
+fn format_language_examples() -> String {
+    LANGUAGE_EXAMPLES
+        .iter()
+        .map(|(flag, code)| format!("{flag} {code}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn prompt_language_selection() -> eyre::Result<String> {
+    let options = LANGUAGE_EXAMPLES
+        .iter()
+        .map(|(flag, code)| format!("{flag} {code}"))
+        .collect::<Vec<_>>();
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select target language")
+        .default(0)
+        .items(&options)
+        .interact()
+        .wrap_err("Failed to read language selection")?;
+    Ok(LANGUAGE_EXAMPLES[choice].1.to_string())
+}
+
+fn is_valid_language_code(code: &str) -> bool {
+    static LANGUAGE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})*$")
+            .expect("language code regex should compile")
+    });
+    LANGUAGE_CODE_RE.is_match(code)
 }

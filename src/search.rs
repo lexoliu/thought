@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -38,6 +39,10 @@ pub struct SearchHit {
     pub title: String,
     pub description: String,
     pub permalink: String,
+    pub locale: String,
+    pub default_locale: String,
+    pub slug: String,
+    pub category: Vec<String>,
 }
 
 impl From<Article> for SearchHit {
@@ -47,6 +52,10 @@ impl From<Article> for SearchHit {
             title: article.title().to_string(),
             description: article.description().to_string(),
             permalink,
+            locale: article.locale().to_string(),
+            default_locale: article.default_locale().to_string(),
+            slug: article.slug().to_string(),
+            category: article.category().segments().clone(),
         }
     }
 }
@@ -221,7 +230,7 @@ impl Searcher {
                 }
             }
         }
-        Ok(hits)
+        Ok(prefer_default_locale(hits))
     }
 
     fn tokenize(input: &str) -> Vec<String> {
@@ -267,7 +276,9 @@ impl Searcher {
                 "slug": article.slug(),
                 "category": article.category().segments(),
                 "description": article.description(),
-                "permalink": format!("{}.html", article.segments().join("/")),
+                "permalink": article.output_file(),
+                "locale": article.locale(),
+                "default_locale": article.default_locale(),
             }));
         }
 
@@ -368,4 +379,26 @@ async fn ensure_meta_table(db: &Arc<Database>) -> eyre::Result<()> {
         Ok(())
     })
     .await?
+}
+
+fn prefer_default_locale(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let mut by_slug: HashMap<String, SearchHit> = HashMap::new();
+    for hit in hits {
+        let key = if hit.category.is_empty() {
+            hit.slug.clone()
+        } else {
+            format!("{}/{}", hit.category.join("/"), hit.slug)
+        };
+        by_slug
+            .entry(key)
+            .and_modify(|existing| {
+                let current_is_default = existing.locale == existing.default_locale;
+                let candidate_is_default = hit.locale == hit.default_locale;
+                if candidate_is_default && !current_is_default {
+                    *existing = hit.clone();
+                }
+            })
+            .or_insert(hit);
+    }
+    by_slug.into_values().collect()
 }
