@@ -3677,9 +3677,9 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "url",
+ "wasm-encoder 0.221.3",
  "wasmtime",
  "wasmtime-wasi",
- "wat",
  "whatlang",
  "whoami",
  "zenwave",
@@ -4202,6 +4202,16 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
+version = "0.221.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc8444fe4920de80a4fe5ab564fff2ae58b6b73166b89751f8c6c93509da32e5"
+dependencies = [
+ "leb128",
+ "wasmparser 0.221.3",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.239.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be00faa2b4950c76fe618c409d2c3ea5a3c9422013e079482d78544bb2d184c"
@@ -4243,6 +4253,17 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.221.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d06bfa36ab3ac2be0dee563380147a5b81ba10dd8885d7fbbc9eb574be67d185"
+dependencies = [
+ "bitflags",
+ "indexmap",
+ "semver",
 ]
 
 [[package]]

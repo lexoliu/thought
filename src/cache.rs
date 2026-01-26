@@ -1,8 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use bincode::{self};
 use color_eyre::eyre;
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 
@@ -22,14 +22,6 @@ struct CachedArticle {
 }
 
 impl CachedArticle {
-    fn matches(&self, article: &Article, theme_fingerprint: &str) -> bool {
-        self.sha256 == article.sha256()
-            && self.title == article.title()
-            && self.description == article.description()
-            && self.metadata == *article.metadata()
-            && self.theme_fingerprint == theme_fingerprint
-    }
-
     fn from_article(article: &Article, html: &str, theme_fingerprint: &str) -> Self {
         Self {
             sha256: article.sha256(),
@@ -42,9 +34,12 @@ impl CachedArticle {
     }
 }
 
-#[derive(Debug)]
+/// Render cache backed by redb with direct database access.
+///
+/// This implementation queries redb directly instead of maintaining an in-memory
+/// HashMap, eliminating the need for Mutex synchronization and O(N) persist operations.
+#[derive(Debug, Clone)]
 pub struct RenderCache {
-    entries: HashMap<String, CachedArticle>,
     db: Arc<Database>,
 }
 
@@ -52,45 +47,65 @@ impl RenderCache {
     pub async fn load(path: PathBuf) -> eyre::Result<Self> {
         let db = open_database(path).await?;
         ensure_cache_table(&db).await?;
-        let entries = load_cache_entries(&db).await?;
-        Ok(Self { entries, db })
+        Ok(Self { db })
     }
 
-    pub fn hit(&self, article: &Article, theme_fingerprint: &str) -> Option<String> {
+    /// Check if there's a valid cache hit for the given article.
+    /// Returns the cached HTML if found and valid, None otherwise.
+    pub async fn hit(&self, article: &Article, theme_fingerprint: &str) -> Option<Arc<str>> {
         let key = Self::article_key(article);
-        self.entries.get(&key).and_then(|entry| {
-            entry
-                .matches(article, theme_fingerprint)
-                .then(|| entry.html.clone())
-        })
-    }
-
-    pub fn store(&mut self, article: &Article, html: &str, theme_fingerprint: &str) {
-        let key = Self::article_key(article);
-        self.entries.insert(
-            key,
-            CachedArticle::from_article(article, html, theme_fingerprint),
-        );
-    }
-
-    pub async fn persist(&self) -> eyre::Result<()> {
-        let entries = self.entries.clone();
         let db = Arc::clone(&self.db);
+        let sha256 = article.sha256();
+        let title = article.title().to_string();
+        let description = article.description().to_string();
+        let metadata = article.metadata().clone();
+        let theme_fp = theme_fingerprint.to_string();
+
+        spawn_blocking(move || -> Option<Arc<str>> {
+            let txn = db.begin_read().ok()?;
+            let table = txn.open_table(CACHE_TABLE).ok()?;
+            let value = table.get(key.as_str()).ok()??;
+            let cached: CachedArticle = bincode::deserialize(value.value()).ok()?;
+
+            // Reconstruct the check inline to avoid borrowing issues
+            if cached.sha256 == sha256
+                && cached.title == title
+                && cached.description == description
+                && cached.metadata == metadata
+                && cached.theme_fingerprint == theme_fp
+            {
+                Some(Arc::from(cached.html))
+            } else {
+                None
+            }
+        })
+        .await
+        .ok()?
+    }
+
+    /// Store rendered HTML for an article directly to the database.
+    /// This is an incremental write - no separate persist() call needed.
+    pub async fn store(
+        &self,
+        article: &Article,
+        html: &str,
+        theme_fingerprint: &str,
+    ) -> eyre::Result<()> {
+        let key = Self::article_key(article);
+        let cached = CachedArticle::from_article(article, html, theme_fingerprint);
+        let bytes = bincode::serialize(&cached)?;
+        let db = Arc::clone(&self.db);
+
         spawn_blocking(move || -> eyre::Result<()> {
             let txn = db.begin_write()?;
-            let _ = txn.delete_table(CACHE_TABLE);
             {
                 let mut table = txn.open_table(CACHE_TABLE)?;
-                for (key, entry) in entries {
-                    let bytes = bincode::serialize(&entry)?;
-                    table.insert(key.as_str(), bytes.as_slice())?;
-                }
+                table.insert(key.as_str(), bytes.as_slice())?;
             }
             txn.commit()?;
             Ok(())
         })
-        .await??;
-        Ok(())
+        .await?
     }
 
     fn article_key(article: &Article) -> String {
@@ -120,22 +135,6 @@ async fn ensure_cache_table(db: &Arc<Database>) -> eyre::Result<()> {
         txn.open_table(CACHE_TABLE)?;
         txn.commit()?;
         Ok(())
-    })
-    .await?
-}
-
-async fn load_cache_entries(db: &Arc<Database>) -> eyre::Result<HashMap<String, CachedArticle>> {
-    let db = Arc::clone(db);
-    spawn_blocking(move || -> eyre::Result<HashMap<String, CachedArticle>> {
-        let txn = db.begin_read()?;
-        let table = txn.open_table(CACHE_TABLE)?;
-        let mut entries = HashMap::new();
-        for item in table.iter()? {
-            let (key, value) = item?;
-            let cached: CachedArticle = bincode::deserialize(value.value())?;
-            entries.insert(key.value().to_string(), cached);
-        }
-        Ok(entries)
     })
     .await?
 }

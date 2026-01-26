@@ -4,7 +4,7 @@ use color_eyre::eyre::{self, eyre};
 use sha2::{Digest, Sha256};
 use tokio::fs;
 use wasmtime::{
-    Config, Engine as WasmEngine, Store,
+    Config, Engine as WasmEngine, InstanceAllocationStrategy, Store,
     component::{Component, Linker},
 };
 use wasmtime_wasi::{self, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -189,6 +189,10 @@ fn build_engine() -> eyre::Result<WasmEngine> {
     config.wasm_component_model(true);
     config.wasm_reference_types(true);
     config.async_support(false);
+
+    // Enable pooling allocator for faster instantiation
+    config.allocation_strategy(InstanceAllocationStrategy::Pooling(Default::default()));
+
     WasmEngine::new(&config).map_err(|err| eyre!(err))
 }
 

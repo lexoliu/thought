@@ -23,7 +23,10 @@ use tantivy::{
 };
 use tokio::{fs, task::spawn_blocking};
 use unicode_segmentation::UnicodeSegmentation;
-use wat::parse_str;
+use wasm_encoder::{
+    CodeSection, ConstExpr, DataSection, ExportKind, ExportSection, Function, FunctionSection,
+    Instruction, MemorySection, MemoryType, Module, TypeSection, ValType,
+};
 
 use crate::{article::Article, utils::write, workspace::Workspace};
 use thought_plugin::helpers::{search_asset_dir, search_js_filename, search_wasm_filename};
@@ -286,28 +289,63 @@ impl Searcher {
     }
 
     fn encode_payload_as_wasm(payload: &[u8]) -> eyre::Result<Vec<u8>> {
-        let pages = ((payload.len() as u32 + 0xFFFF) / 0x10000).max(1);
-        let encoded_data = Self::encode_wat_bytes(payload);
-        let module = format!(
-            r#"(module
-                (memory (export "memory") {pages})
-                (func (export "thought_search_data_len") (result i32) (i32.const {len}))
-                (func (export "thought_search_data_ptr") (result i32) (i32.const 0))
-                (data (i32.const 0) "{data}")
-            )"#,
-            pages = pages,
-            len = payload.len(),
-            data = encoded_data
-        );
-        let wasm = parse_str(&module).map_err(|err| eyre!(err))?;
-        Ok(wasm)
-    }
+        let pages = (payload.len() as u64).div_ceil(0x10000).max(1);
 
-    fn encode_wat_bytes(bytes: &[u8]) -> String {
-        bytes
-            .iter()
-            .map(|byte| format!("\\{:02x}", byte))
-            .collect::<String>()
+        let mut module = Module::new();
+
+        // Type section: () -> i32
+        let mut types = TypeSection::new();
+        types.ty().function([], [ValType::I32]);
+        module.section(&types);
+
+        // Function section
+        let mut functions = FunctionSection::new();
+        functions.function(0); // thought_search_data_len
+        functions.function(0); // thought_search_data_ptr
+        module.section(&functions);
+
+        // Memory section
+        let mut memories = MemorySection::new();
+        memories.memory(MemoryType {
+            minimum: pages,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+        module.section(&memories);
+
+        // Export section
+        let mut exports = ExportSection::new();
+        exports.export("memory", ExportKind::Memory, 0);
+        exports.export("thought_search_data_len", ExportKind::Func, 0);
+        exports.export("thought_search_data_ptr", ExportKind::Func, 1);
+        module.section(&exports);
+
+        // Code section
+        let mut code = CodeSection::new();
+
+        let mut len_func = Function::new([]);
+        #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let payload_len = payload.len() as i32;
+        len_func.instruction(&Instruction::I32Const(payload_len));
+        len_func.instruction(&Instruction::End);
+        code.function(&len_func);
+
+        let mut ptr_func = Function::new([]);
+        ptr_func.instruction(&Instruction::I32Const(0));
+        ptr_func.instruction(&Instruction::End);
+        code.function(&ptr_func);
+
+        module.section(&code);
+
+        // Data section - direct binary, no encoding overhead
+        let mut data = DataSection::new();
+        let offset = ConstExpr::i32_const(0);
+        data.active(0, &offset, payload.iter().copied());
+        module.section(&data);
+
+        Ok(module.finish())
     }
     async fn read_fingerprint(&self) -> eyre::Result<Option<String>> {
         let db = Arc::clone(&self.meta_db);

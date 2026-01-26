@@ -93,7 +93,7 @@ fn map_error(err: ServeError) -> SkyError {
 struct ServeState {
     workspace: Workspace,
     plugins: Arc<PluginManager>,
-    cache: AsyncMutex<RenderCache>,
+    cache: Arc<RenderCache>, // No Mutex needed - redb handles concurrency
     article_guards: AsyncMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     index_lock: AsyncMutex<()>,
     index_dirty: AtomicBool,
@@ -129,7 +129,7 @@ impl ServeState {
         let state = Self {
             workspace,
             plugins: Arc::new(plugins),
-            cache: AsyncMutex::new(cache),
+            cache: Arc::new(cache),
             article_guards: AsyncMutex::new(HashMap::new()),
             index_lock: AsyncMutex::new(()),
             index_dirty: AtomicBool::new(!index_exists),
@@ -239,24 +239,10 @@ impl ServeState {
         Ok(html_response(html))
     }
 
-    async fn fetch_cache_html(&self, article: &Article) -> Option<String> {
-        let cache = self.cache.lock().await;
-        cache.hit(article, &self.theme_fingerprint)
-    }
-
-    async fn store_cache_html(&self, article: &Article, html: &str) -> Result<(), ServeError> {
-        let mut cache = self.cache.lock().await;
-        cache.store(article, html, &self.theme_fingerprint);
-        cache
-            .persist()
-            .await
-            .map_err(|err| ServeError::Internal(err))?;
-        Ok(())
-    }
-
     async fn render_article(&self, article: Article) -> Result<String, ServeError> {
-        if let Some(html) = self.fetch_cache_html(&article).await {
-            return Ok(html);
+        // Use async cache hit - no Mutex needed
+        if let Some(html) = self.cache.hit(&article, &self.theme_fingerprint).await {
+            return Ok(html.to_string());
         }
 
         let rendered = self
@@ -264,7 +250,12 @@ impl ServeState {
             .render_article(article.clone())
             .map_err(ServeError::internal)?;
 
-        self.store_cache_html(&article, &rendered).await?;
+        // Store directly to database - no persist() needed
+        self.cache
+            .store(&article, &rendered, &self.theme_fingerprint)
+            .await
+            .map_err(ServeError::Internal)?;
+
         Ok(rendered)
     }
 

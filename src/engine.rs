@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use color_eyre::eyre;
 use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
-use tokio::{fs as async_fs, spawn, sync::Mutex, task::JoinHandle};
+use tokio::{fs as async_fs, spawn, task::JoinHandle};
 
 use crate::{
     cache::RenderCache, plugin::PluginManager, search, utils::write, workspace::Workspace,
@@ -32,7 +32,7 @@ impl Engine {
         async_fs::create_dir_all(self.workspace.cache_dir()).await?;
         let cache_path = self.workspace.cache_dir().join("cache.redb");
         let cache = RenderCache::load(cache_path).await?;
-        let cache = Arc::new(Mutex::new(cache));
+        let cache = Arc::new(cache); // No Mutex needed - redb handles concurrency
         self.plugins.copy_theme_assets(output).await?;
 
         let stream = self.workspace.articles();
@@ -55,10 +55,7 @@ impl Engine {
             let article_output = output.join(article.output_file());
 
             tasks.push(spawn(async move {
-                let cached_html = {
-                    let cache = cache.lock().await;
-                    cache.hit(&article, &theme_fp)
-                };
+                let cached_html = cache.hit(&article, &theme_fp).await;
 
                 if let Some(html) = cached_html {
                     write(article_output, html.as_bytes()).await?;
@@ -67,12 +64,7 @@ impl Engine {
 
                 let rendered = plugins.render_article(article.clone())?;
                 write(article_output, rendered.as_bytes()).await?;
-
-                {
-                    let mut cache = cache.lock().await;
-                    cache.store(&article, &rendered, &theme_fp);
-                }
-
+                cache.store(&article, &rendered, &theme_fp).await?;
                 Ok(())
             }));
         }
@@ -90,7 +82,7 @@ impl Engine {
             task.await??;
         }
 
-        cache.lock().await.persist().await?;
+        // No persist needed - writes are incremental
         let fingerprint = format!("{:x}", fingerprint.finalize());
         search::emit_search_bundle(&self.workspace, output, Some(&fingerprint)).await?;
 
