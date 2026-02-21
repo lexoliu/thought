@@ -21,7 +21,7 @@ jobs:
     env:
       BENCH_ARTICLES: "300"
       THOUGHT_BENCH_BIN: ${{ github.workspace }}/target/release/thought
-      FLAMEGRAPH_OUTPUT: ${{ runner.temp }}/thought-generate.svg
+      FLAMEGRAPH_OUTPUT: .github-artifacts/thought-generate.svg
       FLAMEGRAPH_FREQ: "99"
     steps:
       - name: Checkout
@@ -46,10 +46,11 @@ jobs:
 
       - name: Capture flamegraph
         run: |
+          mkdir -p "$(dirname "$FLAMEGRAPH_OUTPUT")"
           cd "$THOUGHT_BENCH_WORKSPACE"
           sudo env "PATH=$PATH" flamegraph \
             --freq "$FLAMEGRAPH_FREQ" \
-            --output "$FLAMEGRAPH_OUTPUT" \
+            --output "$GITHUB_WORKSPACE/$FLAMEGRAPH_OUTPUT" \
             -- "$THOUGHT_BENCH_BIN" generate
 
       - name: Upload flamegraph artifact
