@@ -35,6 +35,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Validate CodSpeed token
+        env:
+          CODSPEED_TOKEN: ${{ secrets.CODSPEED_TOKEN }}
+        run: test -n "$CODSPEED_TOKEN" || (echo "::error::Missing required repository secret CODSPEED_TOKEN." && exit 1)
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,7 +68,7 @@ jobs:
         with:
           mode: walltime
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: cargo codspeed run --bench e2e_generate
+          run: cargo codspeed run -m walltime --bench e2e_generate
 
       - name: Run Divan benchmarks in CodSpeed (memory)
         if: matrix.mode == 'memory'
