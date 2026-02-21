@@ -35,10 +35,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Validate CodSpeed token
-        env:
-          CODSPEED_TOKEN: ${{ secrets.CODSPEED_TOKEN }}
-        run: test -n "$CODSPEED_TOKEN" || (echo "::error::Missing required repository secret CODSPEED_TOKEN." && exit 1)
+      - name: Validate OIDC availability
+        run: |
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || (echo "::error::Missing OIDC request URL. Ensure permissions.id-token=write." && exit 1)
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || (echo "::error::Missing OIDC request token. Ensure permissions.id-token=write." && exit 1)
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,6 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: walltime
-          token: ${{ secrets.CODSPEED_TOKEN }}
           run: cargo codspeed run -m walltime --bench e2e_generate
 
       - name: Run Divan benchmarks in CodSpeed (memory)
@@ -75,5 +74,4 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: memory
-          token: ${{ secrets.CODSPEED_TOKEN }}
           run: cargo codspeed run -m memory --bench e2e_generate
