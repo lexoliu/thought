@@ -56,7 +56,7 @@ jobs:
 
       - name: Build benchmark binaries for CodSpeed (runtime)
         if: matrix.mode == 'walltime'
-        run: cargo codspeed build --bench e2e_generate
+        run: cargo codspeed build -m walltime --bench e2e_generate
 
       - name: Build benchmark binaries for CodSpeed (memory)
         if: matrix.mode == 'memory'
