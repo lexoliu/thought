@@ -36,6 +36,14 @@ pub(crate) const SEARCH_WRAPPER: &str = include_str!("../assets/thought-search.j
 const TOKENIZER: &str = "thought_tokenizer";
 const SEARCH_META_TABLE: TableDefinition<&str, &str> = TableDefinition::new("search_meta");
 const INDEX_WRITER_MEMORY: usize = 256 * 1024 * 1024;
+const FIELD_TITLE: &str = "title";
+const FIELD_CONTENT: &str = "content";
+const FIELD_DESCRIPTION: &str = "description";
+const FIELD_PERMALINK: &str = "permalink";
+const FIELD_LOCALE: &str = "locale";
+const FIELD_DEFAULT_LOCALE: &str = "default_locale";
+const FIELD_SLUG: &str = "slug";
+const FIELD_CATEGORY: &str = "category";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
@@ -70,13 +78,23 @@ pub struct Searcher {
     meta_db: Arc<Database>,
     title_field: Field,
     content_field: Field,
-    path_field: Field,
+    description_field: Field,
+    permalink_field: Field,
+    locale_field: Field,
+    default_locale_field: Field,
+    slug_field: Field,
+    category_field: Field,
 }
 
 struct IndexedDoc {
     title: String,
     content: String,
-    path: String,
+    description: String,
+    permalink: String,
+    locale: String,
+    default_locale: String,
+    slug: String,
+    category: String,
 }
 
 impl Searcher {
@@ -89,11 +107,24 @@ impl Searcher {
 
         let schema = Self::build_schema();
         let meta_path = cache_dir.join("meta.json");
-        let index = if fs::try_exists(&meta_path).await? {
-            Index::open_in_dir(&cache_dir)?
+        let mut index = if fs::try_exists(&meta_path).await? {
+            match Index::open_in_dir(&cache_dir) {
+                Ok(index) => index,
+                Err(_) => {
+                    fs::remove_dir_all(&cache_dir).await?;
+                    fs::create_dir_all(&cache_dir).await?;
+                    Index::create_in_dir(&cache_dir, schema.clone())?
+                }
+            }
         } else {
             Index::create_in_dir(&cache_dir, schema.clone())?
         };
+        if !Self::schema_compatible(&index.schema()) {
+            drop(index);
+            fs::remove_dir_all(&cache_dir).await?;
+            fs::create_dir_all(&cache_dir).await?;
+            index = Index::create_in_dir(&cache_dir, schema.clone())?;
+        }
 
         let ngram = NgramTokenizer::new(1, 3, false).map_err(|err| eyre!(err))?;
         let analyzer = TextAnalyzer::builder(ngram)
@@ -103,9 +134,20 @@ impl Searcher {
         index.tokenizers().register(TOKENIZER, analyzer);
 
         let schema = index.schema();
-        let title_field = schema.get_field("title").map_err(|err| eyre!(err))?;
-        let content_field = schema.get_field("content").map_err(|err| eyre!(err))?;
-        let path_field = schema.get_field("path").map_err(|err| eyre!(err))?;
+        let title_field = schema.get_field(FIELD_TITLE).map_err(|err| eyre!(err))?;
+        let content_field = schema.get_field(FIELD_CONTENT).map_err(|err| eyre!(err))?;
+        let description_field = schema
+            .get_field(FIELD_DESCRIPTION)
+            .map_err(|err| eyre!(err))?;
+        let permalink_field = schema
+            .get_field(FIELD_PERMALINK)
+            .map_err(|err| eyre!(err))?;
+        let locale_field = schema.get_field(FIELD_LOCALE).map_err(|err| eyre!(err))?;
+        let default_locale_field = schema
+            .get_field(FIELD_DEFAULT_LOCALE)
+            .map_err(|err| eyre!(err))?;
+        let slug_field = schema.get_field(FIELD_SLUG).map_err(|err| eyre!(err))?;
+        let category_field = schema.get_field(FIELD_CATEGORY).map_err(|err| eyre!(err))?;
 
         let meta_db_path = workspace.cache_dir().join("search_index.redb");
         let meta_db = open_meta_database(meta_db_path).await?;
@@ -117,7 +159,12 @@ impl Searcher {
             meta_db,
             title_field,
             content_field,
-            path_field,
+            description_field,
+            permalink_field,
+            locale_field,
+            default_locale_field,
+            slug_field,
+            category_field,
         })
     }
 
@@ -130,13 +177,33 @@ impl Searcher {
             .set_indexing_options(text_field_indexing.clone())
             .set_stored();
 
-        builder.add_text_field("title", stored_text.clone());
+        builder.add_text_field(FIELD_TITLE, stored_text.clone());
         builder.add_text_field(
-            "content",
+            FIELD_CONTENT,
             TextOptions::default().set_indexing_options(text_field_indexing),
         );
-        builder.add_text_field("path", STORED);
+        builder.add_text_field(FIELD_DESCRIPTION, STORED);
+        builder.add_text_field(FIELD_PERMALINK, STORED);
+        builder.add_text_field(FIELD_LOCALE, STORED);
+        builder.add_text_field(FIELD_DEFAULT_LOCALE, STORED);
+        builder.add_text_field(FIELD_SLUG, STORED);
+        builder.add_text_field(FIELD_CATEGORY, STORED);
         builder.build()
+    }
+
+    fn schema_compatible(schema: &Schema) -> bool {
+        [
+            FIELD_TITLE,
+            FIELD_CONTENT,
+            FIELD_DESCRIPTION,
+            FIELD_PERMALINK,
+            FIELD_LOCALE,
+            FIELD_DEFAULT_LOCALE,
+            FIELD_SLUG,
+            FIELD_CATEGORY,
+        ]
+        .iter()
+        .all(|field| schema.get_field(field).is_ok())
     }
 
     /// Rebuild the search index from scratch.
@@ -151,20 +218,35 @@ impl Searcher {
             docs.push(IndexedDoc {
                 title: article.title().to_string(),
                 content: article.content().to_string(),
-                path: article.output_file(),
+                description: article.description().to_string(),
+                permalink: article.output_file(),
+                locale: article.locale().to_string(),
+                default_locale: article.default_locale().to_string(),
+                slug: article.slug().to_string(),
+                category: Self::encode_category(article.category().segments())?,
             });
         }
 
         let writer = Arc::new(writer);
         let title_field = self.title_field;
         let content_field = self.content_field;
-        let path_field = self.path_field;
+        let description_field = self.description_field;
+        let permalink_field = self.permalink_field;
+        let locale_field = self.locale_field;
+        let default_locale_field = self.default_locale_field;
+        let slug_field = self.slug_field;
+        let category_field = self.category_field;
 
         docs.par_iter().for_each(|entry| {
             let document = doc!(
                 title_field => entry.title.as_str(),
                 content_field => entry.content.as_str(),
-                path_field => entry.path.as_str(),
+                description_field => entry.description.as_str(),
+                permalink_field => entry.permalink.as_str(),
+                locale_field => entry.locale.as_str(),
+                default_locale_field => entry.default_locale.as_str(),
+                slug_field => entry.slug.as_str(),
+                category_field => entry.category.as_str(),
             );
             let _ = writer.add_document(document);
         });
@@ -225,15 +307,67 @@ impl Searcher {
         let mut hits = Vec::new();
         for (_score, address) in top_docs {
             let doc: TantivyDocument = searcher.doc(address)?;
-            if let Some(path_value) = doc.get_first(self.path_field) {
-                let owned: OwnedValue = path_value.into();
-                if let OwnedValue::Str(path) = owned {
-                    let article = self.workspace.read_article(Path::new(&path)).await?;
-                    hits.push(article.into());
-                }
-            }
+            hits.push(self.search_hit_from_doc(&doc)?);
         }
         Ok(prefer_default_locale(hits))
+    }
+
+    fn search_hit_from_doc(&self, doc: &TantivyDocument) -> eyre::Result<SearchHit> {
+        let category = Self::stored_string(doc, self.category_field, FIELD_CATEGORY)?;
+        Ok(SearchHit {
+            title: Self::stored_string(doc, self.title_field, FIELD_TITLE)?,
+            description: Self::stored_string(doc, self.description_field, FIELD_DESCRIPTION)?,
+            permalink: Self::stored_string(doc, self.permalink_field, FIELD_PERMALINK)?,
+            locale: Self::stored_string(doc, self.locale_field, FIELD_LOCALE)?,
+            default_locale: Self::stored_string(
+                doc,
+                self.default_locale_field,
+                FIELD_DEFAULT_LOCALE,
+            )?,
+            slug: Self::stored_string(doc, self.slug_field, FIELD_SLUG)?,
+            category: Self::decode_category(&category)?,
+        })
+    }
+
+    fn stored_string(
+        doc: &TantivyDocument,
+        field: Field,
+        field_name: &str,
+    ) -> eyre::Result<String> {
+        let value = doc
+            .get_first(field)
+            .ok_or_else(|| eyre!("search index document missing `{field_name}`"))?;
+        match OwnedValue::from(value) {
+            OwnedValue::Str(text) => Ok(text),
+            other => Err(eyre!(
+                "search index document field `{field_name}` has invalid value: {other:?}"
+            )),
+        }
+    }
+
+    fn encode_category(segments: &[String]) -> eyre::Result<String> {
+        if let Some(segment) = segments.iter().find(|segment| segment.contains('/')) {
+            return Err(eyre!(
+                "category segment `{segment}` contains reserved separator `/`"
+            ));
+        }
+        Ok(segments.join("/"))
+    }
+
+    fn decode_category(encoded: &str) -> eyre::Result<Vec<String>> {
+        if encoded.is_empty() {
+            return Ok(Vec::new());
+        }
+        let segments = encoded
+            .split('/')
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment.is_empty()) {
+            return Err(eyre!(
+                "search index category `{encoded}` contains empty segment"
+            ));
+        }
+        Ok(segments)
     }
 
     fn tokenize(input: &str) -> Vec<String> {

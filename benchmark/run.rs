@@ -14,7 +14,7 @@
 //! walkdir = "2.5.0"
 //! ```
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
@@ -115,8 +115,12 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to create {}", workdir.display()))?;
 
     let layout = prepare_workspaces(&workdir, &bench_root)?;
-    let prebuilt_theme =
-        ensure_theme_artifact(&repo_root, &theme_cache, &theme_target, args.force_theme_build)?;
+    let prebuilt_theme = ensure_theme_artifact(
+        &repo_root,
+        &theme_cache,
+        &theme_target,
+        args.force_theme_build,
+    )?;
     let hexo_cache = ensure_hexo_dependencies(&bench_root)?;
     write_thought_manifest(&layout.thought_root, &prebuilt_theme)?;
     write_hexo_config(&layout.hexo_root)?;
@@ -175,21 +179,13 @@ fn main() -> Result<()> {
                         name: "thought",
                         duration_ms: thought_duration.as_millis(),
                         posts_per_second: throughput(args.articles, thought_duration),
-                        output_dir: layout
-                            .thought_root
-                            .join("build")
-                            .display()
-                            .to_string(),
+                        output_dir: layout.thought_root.join("build").display().to_string(),
                     },
                     GeneratorResult {
                         name: "hexo",
                         duration_ms: hexo_duration.as_millis(),
                         posts_per_second: throughput(args.articles, hexo_duration),
-                        output_dir: layout
-                            .hexo_root
-                            .join("public")
-                            .display()
-                            .to_string(),
+                        output_dir: layout.hexo_root.join("public").display().to_string(),
                     },
                 ],
             },
@@ -354,7 +350,10 @@ fn ensure_hexo_dependencies(bench_root: &Path) -> Result<PathBuf> {
         }
     }
     if !cache.join("node_modules").exists() {
-        bail!("npm install did not create node_modules in {}", cache.display());
+        bail!(
+            "npm install did not create node_modules in {}",
+            cache.display()
+        );
     }
     Ok(cache)
 }
@@ -387,8 +386,7 @@ fn generate_articles(
 ) -> Result<GenerationStats> {
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} generating articles… {pos}/{len}")
-            .unwrap(),
+        ProgressStyle::with_template("{spinner:.green} generating articles… {pos}/{len}").unwrap(),
     );
     let mut total_bytes = 0usize;
     for idx in 0..total {
@@ -450,7 +448,8 @@ fn resolve_thought_binary(repo_root: &Path, override_path: Option<PathBuf>) -> R
     if let Some(bin) = override_path {
         return Ok(bin);
     }
-    let candidate = repo_root.join("target/release/thought");
+    let bin_name = format!("thought{}", std::env::consts::EXE_SUFFIX);
+    let candidate = repo_root.join("target").join("release").join(bin_name);
     if candidate.exists() {
         return Ok(candidate);
     }
@@ -466,10 +465,7 @@ fn ensure_theme_artifact(
     target_dir: &Path,
     force: bool,
 ) -> Result<PathBuf> {
-    let theme_src = repo_root.join("themes/zenflow");
-    if !theme_src.exists() {
-        bail!("themes/zenflow is missing");
-    }
+    let theme_src = locate_zenflow_theme(repo_root)?;
     fs::create_dir_all(cache_dir)?;
     fs::create_dir_all(target_dir)?;
 
@@ -519,6 +515,52 @@ fn find_wasm_artifact(target_dir: &Path) -> Result<PathBuf> {
         "Unable to locate .wasm under {}. Ensure zenflow builds successfully.",
         release_dir.display()
     );
+}
+
+fn locate_zenflow_theme(repo_root: &Path) -> Result<PathBuf> {
+    let defaults = [
+        repo_root.join("themes/zenflow"),
+        repo_root.join("demo-blog/.thought/plugins/zenflow"),
+    ];
+    for candidate in defaults {
+        if candidate.join("Plugin.toml").exists() {
+            return Ok(candidate);
+        }
+    }
+
+    for entry in WalkDir::new(repo_root)
+        .max_depth(6)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        if contains_blacklisted_component(path) {
+            continue;
+        }
+        if path.file_name().and_then(OsStr::to_str) != Some("zenflow") {
+            continue;
+        }
+        if path.join("Plugin.toml").exists() {
+            return Ok(path.to_path_buf());
+        }
+    }
+
+    bail!(
+        "Unable to locate zenflow theme directory; ensure the repository contains themes/zenflow or demo-blog/.thought/plugins/zenflow."
+    );
+}
+
+fn contains_blacklisted_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some(".git") | Some("target") | Some("node_modules")
+        )
+    })
 }
 
 fn run_generator<'a>(

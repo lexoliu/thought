@@ -38,10 +38,21 @@
         }
         results.innerHTML = hits.map(hit => `<div><a href="${hit.permalink}">${hit.title}</a></div>`).join('');
       }
+      function preferredLocale() {
+        const selectedLocale = langSelect?.selectedOptions?.[0]?.textContent?.trim();
+        if (selectedLocale) {
+          return selectedLocale;
+        }
+        const htmlLocale = document.documentElement.lang?.trim();
+        if (htmlLocale) {
+          return htmlLocale;
+        }
+        return navigator.language || '';
+      }
       async function runSearch() {
         const query = input.value.trim();
         if (!query) { results.innerHTML = ''; return; }
-        const res = await window.ThoughtSearch.search(query);
+        const res = await window.ThoughtSearch.search(query, preferredLocale());
         const hits = Array.isArray(res) ? res : (res && res.hits) ? res.hits : [];
         renderResults(hits);
       }

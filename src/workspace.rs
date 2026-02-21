@@ -6,6 +6,7 @@ use crate::{
         ArticleMetadata, CategoryMetadata, FailToOpenMetadata, MetadataExt, PluginEntry,
         PluginRegistry, WorkspaceManifest,
     },
+    slug::{ArticleSlug, EmptySlug},
     utils::write,
 };
 use color_eyre::eyre::{self, eyre};
@@ -53,6 +54,8 @@ struct WorkspaceInner {
 pub enum FailToCreateArticle {
     #[error("Invalid article path, must include at least a slug")]
     InvalidPath,
+    #[error("{0}")]
+    EmptySlug(#[from] EmptySlug),
     #[error("Fail to open category: {0}")]
     Category(#[from] FailToOpenCategory),
     #[error("IO error: {0}")]
@@ -179,19 +182,14 @@ impl Workspace {
         category: Option<Category>,
     ) -> Result<Article, FailToCreateArticle> {
         let title = title.into();
-        let slug = title
-            .to_lowercase()
-            .replace(' ', "-")
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-')
-            .collect::<String>();
+        let slug = ArticleSlug::from_title(&title)?;
 
         let mut article_dir = if let Some(ref category) = category {
             category.dir()
         } else {
             self.articles_dir()
         };
-        article_dir.push(&slug);
+        article_dir.push(slug.as_str());
 
         let metadata_path = article_dir.join("Article.toml");
         if async_fs::metadata(&metadata_path).await.is_err() {
@@ -216,7 +214,7 @@ impl Workspace {
                 .map(|cat| cat.segments)
                 .unwrap_or_default()
                 .into_iter()
-                .chain(std::iter::once(slug.to_string()))
+                .chain(std::iter::once(slug.into_string()))
                 .collect::<Vec<_>>(),
         )
         .await

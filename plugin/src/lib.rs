@@ -88,8 +88,8 @@ use time::{Duration, OffsetDateTime};
 impl Timestamp {
     #[must_use]
     pub fn to_offset_datetime(&self) -> OffsetDateTime {
-        let base =
-            OffsetDateTime::from_unix_timestamp(self.seconds).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let base = OffsetDateTime::from_unix_timestamp(self.seconds)
+            .unwrap_or_else(|err| panic!("Invalid timestamp seconds {}: {}", self.seconds, err));
         base + Duration::nanoseconds(self.nanos.into())
     }
 

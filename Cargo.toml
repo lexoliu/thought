@@ -44,6 +44,7 @@ zip = "0.6"
 aither = { git = "https://github.com/lexoliu/aither", default-features = true, features = ["openai"], optional = true }
 dialoguer = { version = "0.11.0", optional = true }
 whatlang = "0.16.4"
+slug = "0.1.6"
 
 
 [workspace]

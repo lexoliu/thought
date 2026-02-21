@@ -3,6 +3,7 @@ pub mod engine;
 pub mod metadata;
 pub mod plugin;
 pub mod serve;
+pub mod slug;
 pub mod workspace;
 
 pub(crate) mod utils;

@@ -1,12 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
-use serde_json::json;
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 use whatlang::{Lang, detect};
 
 use crate::{
     category::Category,
     metadata::{ArticleMetadata, FailToOpenMetadata, MetadataExt},
+    slug::ArticleSlug,
     utils::read_to_string,
     workspace::Workspace,
 };
@@ -168,6 +171,13 @@ impl Article {
         locale: Option<String>,
     ) -> Result<Self, FailToOpenArticle> {
         let segments = segments.into();
+        let slug = segments
+            .last()
+            .ok_or(FailToOpenArticle::ArticleNotFound)
+            .and_then(|segment| {
+                ArticleSlug::from_str(segment).map_err(|_| FailToOpenArticle::ArticleNotFound)
+            })?
+            .into_string();
         let path_buf = workspace.articles_dir();
         let full_path = segments.iter().fold(path_buf, |acc, comp| acc.join(comp));
         let category_path = full_path
@@ -196,11 +206,6 @@ impl Article {
         let content = read_to_string(&content_path)
             .await
             .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
-
-        let slug = segments
-            .last()
-            .ok_or(FailToOpenArticle::ArticleNotFound)?
-            .clone();
 
         let category = Category::open(workspace.clone(), category_path)
             .await
@@ -320,33 +325,58 @@ impl Article {
     #[allow(clippy::missing_panics_doc)]
     #[must_use]
     pub fn sha256(&self) -> String {
-        // hash of whole article object
-        // let's encode whole object to json firstly
-        let json = serde_json::to_string(&json!({
-            "title": self.title(),
-            "slug": self.slug(),
-            "category": self.category().dir(),
-            "locale": self.locale(),
-            "metadata": {
-                "created": self.metadata().created().unix_timestamp(),
-                "tags": self.metadata().tags(),
-                "author": self.metadata().author(),
-                "description": self.metadata().description(),
-            },
-            "description": self.description(),
-            "content": self.content(),
-            "translations": self
-                .translations()
-                .iter()
-                .map(|t| json!({"locale": t.locale(), "title": t.title()}))
-                .collect::<Vec<_>>(),
-        }))
-        .expect("Failed to serialize article to JSON");
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(json.as_bytes());
-        let result = hasher.finalize();
-        format!("{result:x}")
+        let mut hasher = Sha256::new();
+
+        hash_str(&mut hasher, self.title());
+        hash_str(&mut hasher, self.slug());
+        hash_strings(&mut hasher, self.category().segments());
+        hash_str(&mut hasher, self.locale());
+        hash_str(&mut hasher, self.default_locale());
+
+        let metadata = self.metadata();
+        let created = metadata.created();
+        hasher.update(created.unix_timestamp().to_le_bytes());
+        hasher.update(created.nanosecond().to_le_bytes());
+        hash_strings(&mut hasher, metadata.tags());
+        hash_str(&mut hasher, metadata.author());
+        hash_optional_str(&mut hasher, metadata.description());
+        hash_optional_str(&mut hasher, metadata.lang());
+
+        hash_str(&mut hasher, self.description());
+        hash_str(&mut hasher, self.content());
+
+        let translations = self.translations();
+        hasher.update((translations.len() as u64).to_le_bytes());
+        for translation in translations {
+            hash_str(&mut hasher, translation.locale());
+            hash_str(&mut hasher, translation.title());
+        }
+
+        format!("{:x}", hasher.finalize())
     }
+}
+
+fn hash_optional_str(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1_u8]);
+            hash_str(hasher, value);
+        }
+        None => hasher.update([0_u8]),
+    }
+}
+
+fn hash_strings(hasher: &mut Sha256, values: &[String]) {
+    hasher.update((values.len() as u64).to_le_bytes());
+    for value in values {
+        hash_str(hasher, value);
+    }
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    let bytes = value.as_bytes();
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 use pulldown_cmark::{Event, Parser, Tag};
