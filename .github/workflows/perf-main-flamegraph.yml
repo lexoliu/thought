@@ -48,7 +48,7 @@ jobs:
         run: |
           mkdir -p "$(dirname "$FLAMEGRAPH_OUTPUT")"
           cd "$THOUGHT_BENCH_WORKSPACE"
-          sudo env "PATH=$PATH" flamegraph \
+          env "PATH=$PATH" flamegraph \
             --freq "$FLAMEGRAPH_FREQ" \
             --output "$GITHUB_WORKSPACE/$FLAMEGRAPH_OUTPUT" \
             -- "$THOUGHT_BENCH_BIN" generate
