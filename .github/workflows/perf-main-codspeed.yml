@@ -27,7 +27,7 @@ jobs:
       matrix:
         include:
           - label: runtime
-            mode: instrumentation
+            mode: walltime
           - label: allocations
             mode: memory
 
@@ -50,7 +50,7 @@ jobs:
         run: bash scripts/ci/bootstrap_benchmark_workspace.sh
 
       - name: Build benchmark binaries for CodSpeed (runtime)
-        if: matrix.mode == 'instrumentation'
+        if: matrix.mode == 'walltime'
         run: cargo codspeed build --bench e2e_generate
 
       - name: Build benchmark binaries for CodSpeed (memory)
@@ -58,10 +58,11 @@ jobs:
         run: cargo codspeed build -m memory --bench e2e_generate
 
       - name: Run Divan benchmarks in CodSpeed (runtime)
-        if: matrix.mode == 'instrumentation'
+        if: matrix.mode == 'walltime'
         uses: CodSpeedHQ/action@v4
         with:
-          mode: instrumentation
+          mode: walltime
+          token: ${{ secrets.CODSPEED_TOKEN }}
           run: cargo codspeed run --bench e2e_generate
 
       - name: Run Divan benchmarks in CodSpeed (memory)
@@ -69,4 +70,5 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: memory
+          token: ${{ secrets.CODSPEED_TOKEN }}
           run: cargo codspeed run -m memory --bench e2e_generate
