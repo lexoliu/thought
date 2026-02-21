@@ -1,0 +1,72 @@
+name: Performance Regression Guard
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: perf-main-codspeed-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  codspeed:
+    name: CodSpeed (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BENCH_ARTICLES: "300"
+      THOUGHT_BENCH_BIN: ${{ github.workspace }}/target/release/thought
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: runtime
+            mode: instrumentation
+          - label: allocations
+            mode: memory
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install cargo-codspeed
+        run: cargo install --locked cargo-codspeed
+
+      - name: Build benchmark thought binary
+        run: cargo build --profile bench --bin thought
+
+      - name: Bootstrap benchmark workspace
+        run: bash scripts/ci/bootstrap_benchmark_workspace.sh
+
+      - name: Build benchmark binaries for CodSpeed (runtime)
+        if: matrix.mode == 'instrumentation'
+        run: cargo codspeed build --bench e2e_generate
+
+      - name: Build benchmark binaries for CodSpeed (memory)
+        if: matrix.mode == 'memory'
+        run: cargo codspeed build -m memory --bench e2e_generate
+
+      - name: Run Divan benchmarks in CodSpeed (runtime)
+        if: matrix.mode == 'instrumentation'
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: instrumentation
+          run: cargo codspeed run --bench e2e_generate
+
+      - name: Run Divan benchmarks in CodSpeed (memory)
+        if: matrix.mode == 'memory'
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: memory
+          run: cargo codspeed run -m memory --bench e2e_generate

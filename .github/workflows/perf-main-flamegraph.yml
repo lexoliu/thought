@@ -1,0 +1,61 @@
+name: Flamegraph Profiling
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: perf-main-flamegraph-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  flamegraph:
+    name: Flamegraph (thought generate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BENCH_ARTICLES: "300"
+      THOUGHT_BENCH_BIN: ${{ github.workspace }}/target/release/thought
+      FLAMEGRAPH_OUTPUT: ${{ runner.temp }}/thought-generate.svg
+      FLAMEGRAPH_FREQ: "99"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Build benchmark thought binary (with symbols)
+        run: RUSTFLAGS="-C debuginfo=1" cargo build --profile bench --bin thought
+
+      - name: Bootstrap benchmark workspace
+        run: bash scripts/ci/bootstrap_benchmark_workspace.sh
+
+      - name: Install flamegraph tooling
+        run: cargo install --locked flamegraph
+
+      - name: Allow perf events
+        run: sudo sysctl -w kernel.perf_event_paranoid=1
+
+      - name: Capture flamegraph
+        run: |
+          cd "$THOUGHT_BENCH_WORKSPACE"
+          sudo env "PATH=$PATH" flamegraph \
+            --freq "$FLAMEGRAPH_FREQ" \
+            --output "$FLAMEGRAPH_OUTPUT" \
+            -- "$THOUGHT_BENCH_BIN" generate
+
+      - name: Upload flamegraph artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thought-generate-flamegraph-${{ github.sha }}
+          path: ${{ env.FLAMEGRAPH_OUTPUT }}
+          if-no-files-found: warn
