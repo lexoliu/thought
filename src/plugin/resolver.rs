@@ -265,6 +265,10 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
         .map_err(io::Error::other)?
 }
 
+pub(crate) fn copy_dir_recursive_sync_public(src: &Path, dst: &Path) -> io::Result<()> {
+    copy_dir_recursive_sync(src, dst)
+}
+
 fn copy_dir_recursive_sync(src: &Path, dst: &Path) -> io::Result<()> {
     std_fs::create_dir_all(dst)?;
     for entry in std_fs::read_dir(src)? {

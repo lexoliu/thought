@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{self, eyre};
 use sha2::{Digest, Sha256};
 use tokio::fs;
+use tracing::debug;
 use wasmtime::{
     Config, Engine as WasmEngine, InstanceAllocationStrategy, Store,
     component::{Component, Linker},
@@ -47,6 +48,7 @@ impl PluginManager {
         let mut theme = None;
         let mut hooks = Vec::new();
         let mut theme_root = None;
+        let cwasm_cache_dir = workspace.cache_dir().join("cwasm");
 
         for (name, locator) in workspace.manifest().plugins() {
             let mut resolved = resolve_plugin(workspace, name, locator)
@@ -55,7 +57,7 @@ impl PluginManager {
             resolved.build().await?;
             let kind = resolved.manifest().kind.clone();
             let component =
-                Component::from_file(&engine, resolved.wasm_path()).map_err(|err| eyre!(err))?;
+                load_or_compile_component(&engine, &resolved.wasm_path(), &cwasm_cache_dir)?;
             let pre = instantiate_pre(&engine, &component)?;
             match kind {
                 PluginKind::Theme => {
@@ -152,6 +154,17 @@ impl PluginManager {
             .map_err(|err| eyre!(err))
     }
 
+    /// Synchronous copy of theme assets for use in the rayon-based pipeline.
+    pub fn copy_theme_assets_sync(&self, output_root: impl AsRef<Path>) -> eyre::Result<()> {
+        let source_assets = self.theme_root.join("assets");
+        if !source_assets.exists() {
+            return Ok(());
+        }
+        let target_assets = output_root.as_ref().join("assets");
+        resolver::copy_dir_recursive_sync_public(&source_assets, &target_assets)
+            .map_err(|err| eyre!(err))
+    }
+
     fn instantiate_theme(&self) -> eyre::Result<(Store<PluginInstanceState>, theme::ThemeRuntime)> {
         let mut store = self.new_store()?;
         let instance = self
@@ -182,6 +195,43 @@ impl PluginManager {
     pub fn theme_fingerprint(&self) -> &str {
         &self.theme_fingerprint
     }
+}
+
+/// Load a Wasm component from a pre-compiled `.cwasm` cache, or compile from
+/// source `.wasm` and persist the native artifact for future runs.
+///
+/// The cache key is `SHA256(wasm_bytes)` so any source change invalidates it.
+fn load_or_compile_component(
+    engine: &WasmEngine,
+    wasm_path: &Path,
+    cache_dir: &Path,
+) -> eyre::Result<Component> {
+    let wasm_bytes = std::fs::read(wasm_path)?;
+    let hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(&wasm_bytes);
+        format!("{:x}", hasher.finalize())
+    };
+    let cwasm_path = cache_dir.join(format!("{hash}.cwasm"));
+
+    if cwasm_path.exists() {
+        debug!(path = %cwasm_path.display(), "loading pre-compiled cwasm");
+        // SAFETY: The cwasm was produced by `Component::serialize` with the same
+        // engine configuration in a previous run of this binary.
+        let component = unsafe { Component::deserialize_file(engine, &cwasm_path) }
+            .map_err(|err| eyre!(err))?;
+        return Ok(component);
+    }
+
+    debug!(path = %wasm_path.display(), "compiling wasm component (cold)");
+    let component = Component::from_binary(engine, &wasm_bytes).map_err(|err| eyre!(err))?;
+    let serialized = component.serialize().map_err(|err| eyre!(err))?;
+
+    std::fs::create_dir_all(cache_dir)?;
+    std::fs::write(&cwasm_path, &serialized)?;
+    debug!(path = %cwasm_path.display(), "cached compiled cwasm");
+
+    Ok(component)
 }
 
 fn build_engine() -> eyre::Result<WasmEngine> {

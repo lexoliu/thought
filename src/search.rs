@@ -35,7 +35,7 @@ pub(crate) const SEARCH_WRAPPER: &str = include_str!("../assets/thought-search.j
 
 const TOKENIZER: &str = "thought_tokenizer";
 const SEARCH_META_TABLE: TableDefinition<&str, &str> = TableDefinition::new("search_meta");
-const INDEX_WRITER_MEMORY: usize = 256 * 1024 * 1024;
+const INDEX_WRITER_MEMORY: usize = 50 * 1024 * 1024;
 const FIELD_TITLE: &str = "title";
 const FIELD_CONTENT: &str = "content";
 const FIELD_DESCRIPTION: &str = "description";
@@ -86,7 +86,7 @@ pub struct Searcher {
     category_field: Field,
 }
 
-struct IndexedDoc {
+pub struct IndexedDoc {
     title: String,
     content: String,
     description: String,
@@ -95,6 +95,21 @@ struct IndexedDoc {
     default_locale: String,
     slug: String,
     category: String,
+}
+
+impl IndexedDoc {
+    pub fn from_article(article: &Article) -> eyre::Result<Self> {
+        Ok(Self {
+            title: article.title().to_string(),
+            content: article.content().to_string(),
+            description: article.description().to_string(),
+            permalink: article.output_file(),
+            locale: article.locale().to_string(),
+            default_locale: article.default_locale().to_string(),
+            slug: article.slug().to_string(),
+            category: Searcher::encode_category(article.category().segments())?,
+        })
+    }
 }
 
 impl Searcher {
@@ -506,6 +521,181 @@ impl Searcher {
         })
         .await?
     }
+
+    // ── Sync methods for the rayon-based generate pipeline ──
+
+    /// Open (or create) the search index synchronously (for rayon contexts).
+    pub fn open_sync(workspace: Workspace) -> eyre::Result<Self> {
+        let cache_dir = workspace.cache_dir().join("search_db");
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(&cache_dir)?;
+        }
+
+        let schema = Self::build_schema();
+        let meta_path = cache_dir.join("meta.json");
+        let mut index = if meta_path.exists() {
+            match Index::open_in_dir(&cache_dir) {
+                Ok(index) => index,
+                Err(_) => {
+                    std::fs::remove_dir_all(&cache_dir)?;
+                    std::fs::create_dir_all(&cache_dir)?;
+                    Index::create_in_dir(&cache_dir, schema.clone())?
+                }
+            }
+        } else {
+            Index::create_in_dir(&cache_dir, schema.clone())?
+        };
+        if !Self::schema_compatible(&index.schema()) {
+            drop(index);
+            std::fs::remove_dir_all(&cache_dir)?;
+            std::fs::create_dir_all(&cache_dir)?;
+            index = Index::create_in_dir(&cache_dir, schema.clone())?;
+        }
+
+        let ngram = NgramTokenizer::new(1, 3, false).map_err(|err| eyre!(err))?;
+        let analyzer = TextAnalyzer::builder(ngram)
+            .filter(RemoveLongFilter::limit(40))
+            .filter(LowerCaser)
+            .build();
+        index.tokenizers().register(TOKENIZER, analyzer);
+
+        let schema = index.schema();
+        let title_field = schema.get_field(FIELD_TITLE).map_err(|err| eyre!(err))?;
+        let content_field = schema.get_field(FIELD_CONTENT).map_err(|err| eyre!(err))?;
+        let description_field = schema
+            .get_field(FIELD_DESCRIPTION)
+            .map_err(|err| eyre!(err))?;
+        let permalink_field = schema
+            .get_field(FIELD_PERMALINK)
+            .map_err(|err| eyre!(err))?;
+        let locale_field = schema.get_field(FIELD_LOCALE).map_err(|err| eyre!(err))?;
+        let default_locale_field = schema
+            .get_field(FIELD_DEFAULT_LOCALE)
+            .map_err(|err| eyre!(err))?;
+        let slug_field = schema.get_field(FIELD_SLUG).map_err(|err| eyre!(err))?;
+        let category_field = schema.get_field(FIELD_CATEGORY).map_err(|err| eyre!(err))?;
+
+        let meta_db_path = workspace.cache_dir().join("search_index.redb");
+        let meta_db = open_meta_database_sync(meta_db_path)?;
+        ensure_meta_table_sync(&meta_db)?;
+
+        Ok(Self {
+            workspace,
+            index,
+            meta_db,
+            title_field,
+            content_field,
+            description_field,
+            permalink_field,
+            locale_field,
+            default_locale_field,
+            slug_field,
+            category_field,
+        })
+    }
+
+    /// Index a batch of pre-built `IndexedDoc` entries in one commit.
+    pub fn batch_index(&self, docs: &[IndexedDoc]) -> eyre::Result<()> {
+        let writer = self.index.writer(INDEX_WRITER_MEMORY)?;
+        writer.delete_all_documents()?;
+
+        let writer = Arc::new(writer);
+        let title_field = self.title_field;
+        let content_field = self.content_field;
+        let description_field = self.description_field;
+        let permalink_field = self.permalink_field;
+        let locale_field = self.locale_field;
+        let default_locale_field = self.default_locale_field;
+        let slug_field = self.slug_field;
+        let category_field = self.category_field;
+
+        docs.par_iter().for_each(|entry| {
+            let document = doc!(
+                title_field => entry.title.as_str(),
+                content_field => entry.content.as_str(),
+                description_field => entry.description.as_str(),
+                permalink_field => entry.permalink.as_str(),
+                locale_field => entry.locale.as_str(),
+                default_locale_field => entry.default_locale.as_str(),
+                slug_field => entry.slug.as_str(),
+                category_field => entry.category.as_str(),
+            );
+            let _ = writer.add_document(document);
+        });
+
+        let mut writer =
+            Arc::try_unwrap(writer).map_err(|_| eyre!("search writer still in use"))?;
+        writer.commit()?;
+        Ok(())
+    }
+
+    /// Ensure the index is up-to-date, synchronously.
+    pub fn ensure_index_sync(
+        &self,
+        docs: &[IndexedDoc],
+        fingerprint: Option<&str>,
+    ) -> eyre::Result<bool> {
+        if let Some(expected) = fingerprint {
+            if let Some(current) = self.read_fingerprint_sync()?
+                && current == expected
+            {
+                return Ok(false);
+            }
+            self.batch_index(docs)?;
+            self.write_fingerprint_sync(expected)?;
+            return Ok(true);
+        }
+
+        self.batch_index(docs)?;
+        Ok(true)
+    }
+
+    fn read_fingerprint_sync(&self) -> eyre::Result<Option<String>> {
+        let txn = self.meta_db.begin_read()?;
+        let table = txn.open_table(SEARCH_META_TABLE)?;
+        let value = table.get("fingerprint")?;
+        Ok(value.map(|guard| guard.value().to_string()))
+    }
+
+    fn write_fingerprint_sync(&self, fingerprint: &str) -> eyre::Result<()> {
+        let txn = self.meta_db.begin_write()?;
+        {
+            let mut table = txn.open_table(SEARCH_META_TABLE)?;
+            table.insert("fingerprint", fingerprint)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Build the Wasm search bundle synchronously.
+    pub fn build_wasm_sync(&self, articles: &[Article], output: impl AsRef<Path>) -> eyre::Result<()> {
+        let payload = Self::export_records_from_articles(articles)?;
+        let wasm = Self::encode_payload_as_wasm(&payload)?;
+
+        if let Some(parent) = output.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::utils::write_sync(output, &wasm)?;
+        Ok(())
+    }
+
+    fn export_records_from_articles(articles: &[Article]) -> eyre::Result<Vec<u8>> {
+        let records: Vec<serde_json::Value> = articles
+            .iter()
+            .map(|article| {
+                json!({
+                    "title": article.title(),
+                    "slug": article.slug(),
+                    "category": article.category().segments(),
+                    "description": article.description(),
+                    "permalink": article.output_file(),
+                    "locale": article.locale(),
+                    "default_locale": article.default_locale(),
+                })
+            })
+            .collect();
+        Ok(serde_json::to_vec(&records)?)
+    }
 }
 
 pub async fn emit_search_bundle(
@@ -551,6 +741,25 @@ async fn ensure_meta_table(db: &Arc<Database>) -> eyre::Result<()> {
         Ok(())
     })
     .await?
+}
+
+fn open_meta_database_sync(path: PathBuf) -> eyre::Result<Arc<Database>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let db = if path.exists() {
+        Database::open(path.as_path())?
+    } else {
+        Database::create(path.as_path())?
+    };
+    Ok(Arc::new(db))
+}
+
+fn ensure_meta_table_sync(db: &Arc<Database>) -> eyre::Result<()> {
+    let txn = db.begin_write()?;
+    txn.open_table(SEARCH_META_TABLE)?;
+    txn.commit()?;
+    Ok(())
 }
 
 fn prefer_default_locale(hits: Vec<SearchHit>) -> Vec<SearchHit> {

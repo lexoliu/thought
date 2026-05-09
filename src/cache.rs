@@ -24,7 +24,7 @@ struct CachedArticle {
 impl CachedArticle {
     fn from_article(article: &Article, html: &str, theme_fingerprint: &str) -> Self {
         Self {
-            sha256: article.sha256(),
+            sha256: article.sha256().to_string(),
             title: article.title().to_string(),
             description: article.description().to_string(),
             metadata: article.metadata().clone(),
@@ -55,7 +55,7 @@ impl RenderCache {
     pub async fn hit(&self, article: &Article, theme_fingerprint: &str) -> Option<Arc<str>> {
         let key = Self::article_key(article);
         let db = Arc::clone(&self.db);
-        let sha256 = article.sha256();
+        let sha256 = article.sha256().to_string();
         let title = article.title().to_string();
         let description = article.description().to_string();
         let metadata = article.metadata().clone();
@@ -108,9 +108,76 @@ impl RenderCache {
         .await?
     }
 
+    /// Synchronous cache hit check for use in rayon / non-async contexts.
+    /// Redb is thread-safe — no `spawn_blocking` needed.
+    pub fn hit_sync(&self, article: &Article, theme_fingerprint: &str) -> Option<Arc<str>> {
+        let key = Self::article_key(article);
+        let txn = self.db.begin_read().ok()?;
+        let table = txn.open_table(CACHE_TABLE).ok()?;
+        let value = table.get(key.as_str()).ok()??;
+        let cached: CachedArticle = bincode::deserialize(value.value()).ok()?;
+
+        if cached.sha256 == article.sha256()
+            && cached.title == article.title()
+            && cached.description == article.description()
+            && cached.metadata == *article.metadata()
+            && cached.theme_fingerprint == theme_fingerprint
+        {
+            Some(Arc::from(cached.html))
+        } else {
+            None
+        }
+    }
+
+    /// Synchronous cache store for use in rayon / non-async contexts.
+    /// Redb handles write concurrency internally.
+    pub fn store_sync(
+        &self,
+        article: &Article,
+        html: &str,
+        theme_fingerprint: &str,
+    ) -> eyre::Result<()> {
+        let key = Self::article_key(article);
+        let cached = CachedArticle::from_article(article, html, theme_fingerprint);
+        let bytes = bincode::serialize(&cached)?;
+        let txn = self.db.begin_write()?;
+        {
+            let mut table = txn.open_table(CACHE_TABLE)?;
+            table.insert(key.as_str(), bytes.as_slice())?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Open the cache database synchronously.
+    pub fn load_sync(path: PathBuf) -> eyre::Result<Self> {
+        let db = open_database_sync(path)?;
+        ensure_cache_table_sync(&db)?;
+        Ok(Self { db })
+    }
+
     fn article_key(article: &Article) -> String {
         article.output_path()
     }
+}
+
+fn open_database_sync(path: PathBuf) -> eyre::Result<Arc<Database>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let db = if path.exists() {
+        Database::open(path.as_path())?
+    } else {
+        Database::create(path.as_path())?
+    };
+    Ok(Arc::new(db))
+}
+
+fn ensure_cache_table_sync(db: &Arc<Database>) -> eyre::Result<()> {
+    let txn = db.begin_write()?;
+    txn.open_table(CACHE_TABLE)?;
+    txn.commit()?;
+    Ok(())
 }
 
 async fn open_database(path: PathBuf) -> eyre::Result<Arc<Database>> {

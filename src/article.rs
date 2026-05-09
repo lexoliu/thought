@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
+    sync::OnceLock,
 };
 
 use sha2::{Digest, Sha256};
@@ -14,11 +15,34 @@ use crate::{
     workspace::Workspace,
 };
 
+/// Pre-read raw bytes from an article directory.
+/// No UTF-8 validation — that happens in the Processor phase via SIMD.
+#[derive(Debug)]
+pub struct ArticleSource {
+    /// Path segments relative to the articles root (e.g. `["tech", "my-post"]`).
+    pub segments: Vec<String>,
+    /// Raw bytes of `Article.toml`.
+    pub metadata_bytes: Vec<u8>,
+    /// All `.md` files in the article directory.
+    pub md_files: Vec<MdFile>,
+}
+
+/// A single markdown file read as raw bytes.
+#[derive(Debug)]
+pub struct MdFile {
+    /// File name (e.g. `"article.md"` or `"zh-CN.md"`).
+    pub filename: String,
+    /// Raw file content — UTF-8 validated later via `simdutf8`.
+    pub content: Vec<u8>,
+}
+
 /// An article with its full content
 #[derive(Debug, Clone)]
 pub struct Article {
     pub(crate) content: String, // markdown content
     pub(crate) preview: ArticlePreview,
+    /// Cached SHA256 hash (computed once, reused).
+    sha256_cache: OnceLock<String>,
 }
 
 /// A preview of an article without its content
@@ -146,7 +170,119 @@ impl Article {
                 default_locale,
                 translations,
             },
+            sha256_cache: OnceLock::new(),
         }
+    }
+
+    /// Construct all locale variants of an article from pre-read raw bytes.
+    ///
+    /// Uses SIMD-accelerated UTF-8 validation (`simdutf8`).
+    /// Pure CPU — no file I/O, no async.
+    pub fn from_source(
+        category: Category,
+        source: &ArticleSource,
+    ) -> Result<Vec<Self>, FailToOpenArticle> {
+        // Validate slug
+        let slug = source
+            .segments
+            .last()
+            .ok_or(FailToOpenArticle::ArticleNotFound)
+            .and_then(|segment| {
+                ArticleSlug::from_str(segment).map_err(|_| FailToOpenArticle::ArticleNotFound)
+            })?
+            .into_string();
+
+        // Parse metadata (simdutf8 for SIMD UTF-8 validation)
+        let metadata_str = simdutf8::basic::from_utf8(&source.metadata_bytes)
+            .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
+        let metadata: ArticleMetadata =
+            toml::from_str(metadata_str).map_err(FailToOpenMetadata::TomlParse)?;
+
+        // Validate UTF-8 for all .md files and collect as strings
+        let md_contents: Vec<(&str, &str)> = source
+            .md_files
+            .iter()
+            .map(|md| {
+                let content_str = simdutf8::basic::from_utf8(&md.content)
+                    .map_err(|_| FailToOpenArticle::ArticleNotFound)?;
+                Ok((md.filename.as_str(), content_str))
+            })
+            .collect::<Result<Vec<_>, FailToOpenArticle>>()?;
+
+        if md_contents.is_empty() {
+            return Err(FailToOpenArticle::ArticleNotFound);
+        }
+
+        // Determine default locale from metadata or content detection
+        let default_locale =
+            resolve_default_locale_from_contents(metadata.lang(), &md_contents);
+
+        // Extract title/description from each .md file and determine its locale
+        struct Extracted {
+            locale: String,
+            title: Option<String>,
+            description: String,
+            content: String,
+        }
+        let mut extracted: Vec<Extracted> = Vec::with_capacity(md_contents.len());
+        for (filename, content) in &md_contents {
+            let locale = locale_from_md_filename(filename, &default_locale);
+            let ex = extract(content);
+            extracted.push(Extracted {
+                locale,
+                title: ex.title,
+                description: ex.description,
+                content: ex.content.to_string(),
+            });
+        }
+
+        // Find the primary title (from default locale, or date fallback)
+        let primary_title = extracted
+            .iter()
+            .find(|e| e.locale == default_locale)
+            .and_then(|e| e.title.clone())
+            .unwrap_or_else(|| {
+                let format = format_description!(
+                    "[weekday repr:short] [day padding:none] [month repr:short]"
+                );
+                metadata
+                    .created()
+                    .format(format)
+                    .expect("date format should succeed")
+            });
+
+        // Build translations list
+        let translations: Vec<ArticleTranslation> = extracted
+            .iter()
+            .map(|e| ArticleTranslation {
+                locale: e.locale.clone(),
+                title: e.title.clone().unwrap_or_else(|| primary_title.clone()),
+            })
+            .collect();
+
+        // Build one Article per locale variant
+        let articles = extracted
+            .into_iter()
+            .map(|e| {
+                let title = e.title.unwrap_or_else(|| primary_title.clone());
+                Article {
+                    content: e.content,
+                    preview: ArticlePreview {
+                        title,
+                        slug: slug.clone(),
+                        category: category.clone(),
+                        metadata: metadata.clone(),
+                        description: e.description,
+                        locale: e.locale,
+                        default_locale: default_locale.clone(),
+                        translations: translations.clone(),
+                    },
+                    sha256_cache: OnceLock::new(),
+                }
+            })
+            .collect();
+
+        Ok(articles)
     }
 
     // example: /path/to/article.md
@@ -241,6 +377,7 @@ impl Article {
                 default_locale,
                 translations,
             },
+            sha256_cache: OnceLock::new(),
         })
     }
 
@@ -320,39 +457,42 @@ impl Article {
         self.preview.output_file()
     }
 
-    /// Calculate the SHA256 hash of the article
-    /// This can be used to uniquely identify the article content
+    /// Calculate the SHA256 hash of the article.
+    /// Cached via `OnceLock` — computes once, returns cached value thereafter.
+    /// SHA256 is hardware-accelerated (SHA-NI on x86, SHA2 on ARM) via the `sha2` crate.
     #[allow(clippy::missing_panics_doc)]
     #[must_use]
-    pub fn sha256(&self) -> String {
-        let mut hasher = Sha256::new();
+    pub fn sha256(&self) -> &str {
+        self.sha256_cache.get_or_init(|| {
+            let mut hasher = Sha256::new();
 
-        hash_str(&mut hasher, self.title());
-        hash_str(&mut hasher, self.slug());
-        hash_strings(&mut hasher, self.category().segments());
-        hash_str(&mut hasher, self.locale());
-        hash_str(&mut hasher, self.default_locale());
+            hash_str(&mut hasher, self.title());
+            hash_str(&mut hasher, self.slug());
+            hash_strings(&mut hasher, self.category().segments());
+            hash_str(&mut hasher, self.locale());
+            hash_str(&mut hasher, self.default_locale());
 
-        let metadata = self.metadata();
-        let created = metadata.created();
-        hasher.update(created.unix_timestamp().to_le_bytes());
-        hasher.update(created.nanosecond().to_le_bytes());
-        hash_strings(&mut hasher, metadata.tags());
-        hash_str(&mut hasher, metadata.author());
-        hash_optional_str(&mut hasher, metadata.description());
-        hash_optional_str(&mut hasher, metadata.lang());
+            let metadata = self.metadata();
+            let created = metadata.created();
+            hasher.update(created.unix_timestamp().to_le_bytes());
+            hasher.update(created.nanosecond().to_le_bytes());
+            hash_strings(&mut hasher, metadata.tags());
+            hash_str(&mut hasher, metadata.author());
+            hash_optional_str(&mut hasher, metadata.description());
+            hash_optional_str(&mut hasher, metadata.lang());
 
-        hash_str(&mut hasher, self.description());
-        hash_str(&mut hasher, self.content());
+            hash_str(&mut hasher, self.description());
+            hash_str(&mut hasher, self.content());
 
-        let translations = self.translations();
-        hasher.update((translations.len() as u64).to_le_bytes());
-        for translation in translations {
-            hash_str(&mut hasher, translation.locale());
-            hash_str(&mut hasher, translation.title());
-        }
+            let translations = self.translations();
+            hasher.update((translations.len() as u64).to_le_bytes());
+            for translation in translations {
+                hash_str(&mut hasher, translation.locale());
+                hash_str(&mut hasher, translation.title());
+            }
 
-        format!("{:x}", hasher.finalize())
+            format!("{:x}", hasher.finalize())
+        })
     }
 }
 
@@ -532,7 +672,7 @@ pub enum FailToOpenArticle {
     #[error("Article not found")]
     ArticleNotFound,
     #[error("Failed to open metadata")]
-    FailToOpenMetadata(FailToOpenMetadata),
+    FailToOpenMetadata(#[from] FailToOpenMetadata),
 }
 
 // extract title,description and content from markdown, but do not render it to html
@@ -608,6 +748,43 @@ fn parse_locale_from_filename(path: &Path, default_locale: &str) -> Option<Strin
         Some(stem) if !stem.is_empty() => Some(stem.to_string()),
         _ => None,
     }
+}
+
+/// Determine locale from a bare `.md` filename (e.g. `"article.md"` → default, `"zh-CN.md"` → `"zh-CN"`).
+fn locale_from_md_filename(filename: &str, default_locale: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("article");
+    if stem == "article" {
+        default_locale.to_string()
+    } else {
+        stem.to_string()
+    }
+}
+
+/// Determine default locale from pre-read in-memory `.md` file contents.
+/// Pure CPU — no I/O.
+fn resolve_default_locale_from_contents(
+    metadata_lang: Option<&str>,
+    md_files: &[(&str, &str)], // (filename, content)
+) -> String {
+    if let Some(lang) = normalize_lang_tag(metadata_lang) {
+        return lang;
+    }
+    // Try article.md first (primary content file)
+    if let Some((_, content)) = md_files.iter().find(|(name, _)| *name == "article.md") {
+        if let Some(lang) = detect_locale_from_text(content) {
+            return lang;
+        }
+    }
+    // Try any .md file
+    for (_, content) in md_files {
+        if let Some(lang) = detect_locale_from_text(content) {
+            return lang;
+        }
+    }
+    "en".to_string()
 }
 
 async fn enumerate_locales(

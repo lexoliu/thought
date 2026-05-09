@@ -84,6 +84,24 @@ pub fn into_segments(path: &Path) -> Result<Vec<String>, FailToOpenCategory> {
 }
 
 impl Category {
+    /// Construct a category from pre-read raw bytes (SIMD-accelerated UTF-8 validation).
+    /// Pure CPU — no I/O, no async.
+    pub fn from_bytes(
+        workspace: Workspace,
+        segments: Vec<String>,
+        toml_bytes: &[u8],
+    ) -> Result<Self, FailToOpenCategory> {
+        let toml_str = simdutf8::basic::from_utf8(toml_bytes)
+            .map_err(|_| FailToOpenCategory::UnsupportedPathEncoding)?;
+        let metadata: CategoryMetadata =
+            toml::from_str(toml_str).map_err(FailToOpenMetadata::TomlParse)?;
+        Ok(Self {
+            workspace,
+            segments,
+            metadata,
+        })
+    }
+
     /// Open a category from the given root path and category path
     ///
     /// # Errors

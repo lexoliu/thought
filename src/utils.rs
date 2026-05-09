@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{io::Write as _, path::Path};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 
@@ -16,6 +16,18 @@ pub async fn write(
     let mut writer = BufWriter::with_capacity(IO_BUFFER_SIZE, file);
     writer.write_all(content.as_ref()).await?;
     writer.flush().await
+}
+
+/// Synchronous write for use in rayon / non-async contexts.
+pub fn write_sync(path: impl AsRef<Path>, content: &[u8]) -> Result<(), std::io::Error> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(path)?;
+    let mut writer = std::io::BufWriter::with_capacity(IO_BUFFER_SIZE, file);
+    writer.write_all(content)?;
+    writer.flush()
 }
 
 pub async fn read_to_string(path: impl AsRef<Path>) -> Result<String, std::io::Error> {
