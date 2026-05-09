@@ -538,11 +538,10 @@ async fn resolve_default_locale_from_disk(
     }
 
     let primary = article_dir.join("article.md");
-    if let Ok(content) = read_to_string(&primary).await {
-        if let Some(lang) = detect_locale_from_text(&content) {
+    if let Ok(content) = read_to_string(&primary).await
+        && let Some(lang) = detect_locale_from_text(&content) {
             return Ok(lang);
         }
-    }
 
     let mut entries = tokio::fs::read_dir(article_dir)
         .await
@@ -562,11 +561,10 @@ async fn resolve_default_locale_from_disk(
             if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
                 continue;
             }
-            if let Ok(content) = read_to_string(&path).await {
-                if let Some(lang) = detect_locale_from_text(&content) {
+            if let Ok(content) = read_to_string(&path).await
+                && let Some(lang) = detect_locale_from_text(&content) {
                     return Ok(lang);
                 }
-            }
         }
     }
 
@@ -773,11 +771,10 @@ fn resolve_default_locale_from_contents(
         return lang;
     }
     // Try article.md first (primary content file)
-    if let Some((_, content)) = md_files.iter().find(|(name, _)| *name == "article.md") {
-        if let Some(lang) = detect_locale_from_text(content) {
+    if let Some((_, content)) = md_files.iter().find(|(name, _)| *name == "article.md")
+        && let Some(lang) = detect_locale_from_text(content) {
             return lang;
         }
-    }
     // Try any .md file
     for (_, content) in md_files {
         if let Some(lang) = detect_locale_from_text(content) {

@@ -275,11 +275,10 @@ impl Searcher {
     /// Rebuild the index only when the provided fingerprint differs from the cached value.
     pub async fn ensure_index(&self, fingerprint: Option<&str>) -> eyre::Result<bool> {
         if let Some(expected) = fingerprint {
-            if let Some(current) = self.read_fingerprint().await? {
-                if current == expected {
+            if let Some(current) = self.read_fingerprint().await?
+                && current == expected {
                     return Ok(false);
                 }
-            }
             self.index().await?;
             self.write_fingerprint(expected).await?;
             return Ok(true);

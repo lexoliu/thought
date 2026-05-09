@@ -9,7 +9,6 @@ use tar::Builder;
 use thought::{plugin::PluginManager, workspace::Workspace};
 use tokio::{fs, process::Command};
 use toml::Value;
-use whoami;
 
 #[derive(Subcommand)]
 pub enum PluginCommands {

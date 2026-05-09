@@ -73,12 +73,12 @@ fn build_router(state: Arc<ServeState>) -> Router {
 }
 
 async fn index_handler(State(state): State<Arc<ServeState>>) -> SkyResult<Response> {
-    state.serve_index().await.map_err(|err| map_error(err))
+    state.serve_index().await.map_err(map_error)
 }
 
 async fn any_handler(params: Params, State(state): State<Arc<ServeState>>) -> SkyResult<Response> {
     let path = params.get("path").unwrap_or("");
-    state.serve_path(path).await.map_err(|err| map_error(err))
+    state.serve_path(path).await.map_err(map_error)
 }
 
 fn map_error(err: ServeError) -> SkyError {

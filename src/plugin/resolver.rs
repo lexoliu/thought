@@ -102,11 +102,10 @@ pub async fn resolve_plugin(
     let descriptor_path = plugin_dir.join(".locator.json");
     let allow_reuse = !matches!(locator, PluginLocator::Local { .. });
     let mut reuse_existing = false;
-    if allow_reuse && fs::metadata(&plugin_dir).await.is_ok() {
-        if let Ok(existing) = fs::read(&descriptor_path).await {
+    if allow_reuse && fs::metadata(&plugin_dir).await.is_ok()
+        && let Ok(existing) = fs::read(&descriptor_path).await {
             reuse_existing = existing == locator_stamp;
         }
-    }
 
     if !reuse_existing && fs::metadata(&plugin_dir).await.is_ok() {
         fs::remove_dir_all(&plugin_dir).await?;
@@ -127,7 +126,7 @@ pub async fn resolve_plugin(
                 if let Some((author, repo)) = parse_github(url) {
                     let tag = rev
                         .as_deref()
-                        .or_else(|| branch.as_deref())
+                        .or(branch.as_deref())
                         .unwrap_or("latest");
                     if try_github_release(&author, &repo, tag, &plugin_dir)
                         .await?
@@ -135,7 +134,7 @@ pub async fn resolve_plugin(
                     {
                         clone_repo(
                             url,
-                            rev.as_deref().or_else(|| branch.as_deref()),
+                            rev.as_deref().or(branch.as_deref()),
                             &plugin_dir,
                         )
                         .await?;
@@ -143,7 +142,7 @@ pub async fn resolve_plugin(
                 } else {
                     clone_repo(
                         url,
-                        rev.as_deref().or_else(|| branch.as_deref()),
+                        rev.as_deref().or(branch.as_deref()),
                         &plugin_dir,
                     )
                     .await?;

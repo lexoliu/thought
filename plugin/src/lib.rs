@@ -135,7 +135,7 @@ impl ArticleMetadata {
 
     #[must_use]
     pub fn language(&self) -> Option<&str> {
-        self.lang.as_ref().map(|s| s.as_str())
+        self.lang.as_deref()
     }
 }
 
